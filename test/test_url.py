@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 import unittest
 import webob
+
 from urlpath import URL, JailedURL
 
 
 class UrlTest(unittest.TestCase):
-
     def test_simple(self):
         original = 'http://www.example.com/path/to/file.ext?query#fragment'
         url = URL(original)
