@@ -1,0 +1,15 @@
+name: Test
+on: [push]
+jobs:
+  Test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.4, 3.5, 3.6, 3.7, 3.8, 3.9, '3.10']
+    container: python:${{ matrix.python-version }}
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v2
+      - run: pip install -e .[test]
+      - run: python -m unittest
+      - run: python -m doctest README.rst

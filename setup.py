@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import sys
-import os
 import ast
+import os
 from setuptools import setup
+import sys
+
+python_minor_version = int(sys.version.split('.')[1])
 
 
 def readme():
@@ -37,9 +39,9 @@ def get_meta(filename):
 
 
 install_requires = ['requests']
-if sys.version[:3] < '3.4':
+if python_minor_version < 4:
     install_requires.append('pathlib')
-if sys.version[:3] < '3.3':
+if python_minor_version < 3:
     install_requires.append('mock')
 
 meta = get_meta('urlpath.py')
@@ -56,6 +58,7 @@ setup(
     long_description=readme(),
     classifiers=meta['__classifiers__'],
     license=meta['__license__'],
+    python_requires='~=3.4',
     install_requires=install_requires,
     extras_require={
         'test': ['WebOb', 'jmespath'],

@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 """Object-oriented URL from `urllib.parse` and `pathlib`
 """
-__version__ = '1.1.7'
-__author__ = __author_email__ = 'chrono-meter@gmx.net'
+__version__ = '1.2.0'
+__author__ = __author_email__ = 'brandonschabell@gmail.com'
 __license__ = 'PSF'
-__url__ = 'https://github.com/chrono-meter/urlpath'
+__url__ = 'https://github.com/brandonschabell/urlpath'
 __download_url__ = 'http://pypi.python.org/pypi/urlpath'
 # http://pypi.python.org/pypi?%3Aaction=list_classifiers
 __classifiers__ = [
@@ -19,6 +19,8 @@ __classifiers__ = [
     'Programming Language :: Python :: 3.6',
     'Programming Language :: Python :: 3.7',
     'Programming Language :: Python :: 3.8',
+    'Programming Language :: Python :: 3.9',
+    'Programming Language :: Python :: 3.10',
     'Topic :: Internet :: WWW/HTTP',
     'Topic :: Software Development :: Libraries :: Python Modules',
 ]
@@ -26,9 +28,9 @@ __all__ = ('URL',)
 
 import collections.abc
 import functools
+from pathlib import _PosixFlavour, PurePath
 import re
 import urllib.parse
-from pathlib import _PosixFlavour, PurePath
 
 try:
     from unittest.mock import patch
@@ -175,6 +177,18 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
     _flavour = _URLFlavour()
     _parse_qsl_args = {}
     _urlencode_args = {'doseq': True}
+
+    @classmethod
+    def _from_parts(cls, args):
+        ret = super()._from_parts(args)
+        ret._init()
+        return ret
+
+    @classmethod
+    def _from_parsed_parts(cls, drv, root, parts):
+        ret = super()._from_parsed_parts(drv, root, parts)
+        ret._init()
+        return ret
 
     @classmethod
     def _parse_args(cls, args):
