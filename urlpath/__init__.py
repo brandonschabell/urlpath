@@ -1,41 +1,14 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Object-oriented URL from `urllib.parse` and `pathlib`
-"""
-__version__ = '1.2.0'
-__author__ = __author_email__ = 'brandonschabell@gmail.com'
-__license__ = 'PSF'
-__url__ = 'https://github.com/brandonschabell/urlpath'
-__download_url__ = 'http://pypi.python.org/pypi/urlpath'
-# http://pypi.python.org/pypi?%3Aaction=list_classifiers
-__classifiers__ = [
-    'Development Status :: 5 - Production/Stable',
-    'Environment :: Web Environment',
-    'Intended Audience :: Developers',
-    'License :: OSI Approved :: Python Software Foundation License',
-    'Operating System :: OS Independent',
-    'Programming Language :: Python :: 3.4',
-    'Programming Language :: Python :: 3.5',
-    'Programming Language :: Python :: 3.6',
-    'Programming Language :: Python :: 3.7',
-    'Programming Language :: Python :: 3.8',
-    'Programming Language :: Python :: 3.9',
-    'Programming Language :: Python :: 3.10',
-    'Topic :: Internet :: WWW/HTTP',
-    'Topic :: Software Development :: Libraries :: Python Modules',
-]
-__all__ = ('URL',)
+"""Object-oriented URL from `urllib.parse` and `pathlib`"""
+
+__all__ = ("URL",)
 
 import collections.abc
 import functools
-from pathlib import _PosixFlavour, PurePath
 import re
 import urllib.parse
+from pathlib import PurePath, _PosixFlavour
+from unittest.mock import patch
 
-try:
-    from unittest.mock import patch
-except ImportError:
-    from mock import patch
 import requests
 
 try:
@@ -54,7 +27,8 @@ missing = object()
 # http://stackoverflow.com/a/2704866/3622941
 class FrozenDict(collections.abc.Mapping):
     """Immutable dict object."""
-    __slots__ = ('_d', '_hash')
+
+    __slots__ = ("_d", "_hash")
 
     def __init__(self, *args, **kwargs):
         self._d = dict(*args, **kwargs)
@@ -71,19 +45,21 @@ class FrozenDict(collections.abc.Mapping):
 
     def __hash__(self):
         # It would have been simpler and maybe more obvious to
-        # use hash(tuple(sorted(self._d.iteritems()))) from this discussion
+        # use hash(tuple(sorted(self._d.items()))) from this discussion
         # so far, but this solution is O(n). I don't know what kind of
         # n we are going to run into, but sometimes it's hard to resist the
         # urge to optimize when it will gain improved algorithmic performance.
         if self._hash is None:
             self._hash = 0
-            for pair in self.iteritems():
+            for pair in self._d.items():
                 self._hash ^= hash(pair)
         return self._hash
 
     def __repr__(self):
-        return '<{} {{{}}}>'.format(self.__class__.__name__,
-                                    ', '.join('{!r}: {!r}'.format(*i) for i in sorted(self._d.items())))
+        return "<{} {{{}}}>".format(
+            self.__class__.__name__,
+            ", ".join("{!r}: {!r}".format(*i) for i in sorted(self._d.items())),
+        )
 
 
 class MultiDictMixin:
@@ -106,12 +82,11 @@ class FrozenMultiDict(MultiDictMixin, FrozenDict):
 
 
 def cached_property(getter):
-    """Limited version of `functools.lru_cache`. But `__hash__` is not required.
-    """
+    """Limited version of `functools.lru_cache`. But `__hash__` is not required."""
 
     @functools.wraps(getter)
     def helper(self):
-        key = '_cached_property_' + getter.__name__
+        key = "_cached_property_" + getter.__name__
 
         if key in self.__dict__:
             return self.__dict__[key]
@@ -132,22 +107,22 @@ def netlocjoin(username, password, hostname, port):
     :return: netloc string
     :rtype: str
     """
-    result = ''
+    result = ""
 
     if username is not None:
-        result += urllib.parse.quote(username, safe='')
+        result += urllib.parse.quote(username, safe="")
 
     if password is not None:
-        result += ':' + urllib.parse.quote(password, safe='')
+        result += ":" + urllib.parse.quote(password, safe="")
 
     if result:
-        result += '@'
+        result += "@"
 
     if hostname is not None:
-        result += hostname.encode('idna').decode('ascii')
+        result += hostname.encode("idna").decode("ascii")
 
     if port is not None:
-        result += ':' + str(port)
+        result += ":" + str(port)
 
     return result
 
@@ -158,25 +133,25 @@ class _URLFlavour(_PosixFlavour):
 
     def splitroot(self, part, sep=_PosixFlavour.sep):
         assert sep == self.sep
-        assert '\\x00' not in part
+        assert "\\x00" not in part
 
         scheme, netloc, path, query, fragment = urllib.parse.urlsplit(part)
 
         # trick to escape '/' in query and fragment and trailing
-        if not re.match(re.escape(sep) + '+$', path):
-            path = re.sub('%s+$' % (re.escape(sep),), lambda m: '\\x00' * len(m.group(0)), path)
-        path = urllib.parse.urlunsplit(('', '', path, query.replace('/', '\\x00'), fragment.replace('/', '\\x00')))
+        if not re.match(re.escape(sep) + "+$", path):
+            path = re.sub(f"{re.escape(sep)}+$", lambda m: "\\x00" * len(m.group(0)), path)
+        path = urllib.parse.urlunsplit(("", "", path, query.replace("/", "\\x00"), fragment.replace("/", "\\x00")))
 
-        drive = urllib.parse.urlunsplit((scheme, netloc, '', '', ''))
-        root, path = re.match('^(%s*)(.*)$' % (re.escape(sep),), path).groups()
+        drive = urllib.parse.urlunsplit((scheme, netloc, "", "", ""))
+        root, path = re.match(f"^({re.escape(sep)}*)(.*)$", path).groups()
 
         return drive, root, path
 
 
 class URL(urllib.parse._NetlocResultMixinStr, PurePath):
     _flavour = _URLFlavour()
-    _parse_qsl_args = {}
-    _urlencode_args = {'doseq': True}
+    _parse_qsl_args: dict[str, bool] = {}
+    _urlencode_args: dict[str, bool] = {"doseq": True}
 
     @classmethod
     def _from_parts(cls, args):
@@ -192,7 +167,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
 
     @classmethod
     def _parse_args(cls, args):
-        return super()._parse_args((cls._canonicalize_arg(a) for a in args))
+        return super()._parse_args(cls._canonicalize_arg(a) for a in args)
 
     @classmethod
     def _canonicalize_arg(cls, a):
@@ -210,11 +185,11 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
     def _init(self):
         if self._parts:
             # trick to escape '/' in query and fragment and trailing
-            self._parts[-1] = self._parts[-1].replace('\\x00', '/')
+            self._parts[-1] = self._parts[-1].replace("\\x00", "/")
 
     def _make_child(self, args):
         # replace by parts that have no query and have no fragment
-        with patch.object(self, '_parts', list(self.parts)):
+        with patch.object(self, "_parts", list(self.parts)):
             return super()._make_child(args)
 
     @cached_property
@@ -224,7 +199,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
 
     @cached_property
     def __bytes__(self):
-        return str(self).encode('utf-8')
+        return str(self).encode("utf-8")
 
     # TODO: sort self.query in __hash__
 
@@ -303,12 +278,12 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
     @cached_property
     def hostname(self):
         """The hostname of url."""
+        import contextlib
+
         result = super().hostname
         if result is not None:
-            try:
-                result = result.encode('ascii').decode('idna')
-            except UnicodeEncodeError:
-                pass
+            with contextlib.suppress(UnicodeEncodeError):
+                result = result.encode("ascii").decode("idna")
         return result
 
     @property
@@ -317,14 +292,17 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         """The path of url, it's with trailing sep."""
 
         # https://tools.ietf.org/html/rfc3986#appendix-A
-        safe_pchars = '-._~!$&\'()*+,;=:@'
+        safe_pchars = "-._~!$&'()*+,;=:@"
 
         begin = 1 if self._drv or self._root else 0
 
-        return self._root \
-               + self._flavour.sep.join(
-            urllib.parse.quote(i, safe=safe_pchars) for i in self._parts[begin:-1] + [self.name]) \
-               + self.trailing_sep
+        return (
+            self._root
+            + self._flavour.sep.join(
+                urllib.parse.quote(i, safe=safe_pchars) for i in self._parts[begin:-1] + [self.name]
+            )
+            + self.trailing_sep
+        )
 
     @property
     @cached_property
@@ -348,7 +326,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
     @cached_property
     def trailing_sep(self):
         """The trailing separator of url."""
-        return re.search('(' + re.escape(self._flavour.sep) + '*)$', urllib.parse.urlsplit(super().name).path).group(0)
+        return re.search("(" + re.escape(self._flavour.sep) + "*)$", urllib.parse.urlsplit(super().name).path).group(0)
 
     @property
     @cached_property
@@ -360,19 +338,32 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
     @cached_property
     def form(self):
         """The query parsed by `urllib.parse.parse_qs` of url."""
-        return FrozenMultiDict({k: tuple(v)
-                                for k, v in urllib.parse.parse_qs(self.query, **self._parse_qsl_args).items()})
+        return FrozenMultiDict(
+            {k: tuple(v) for k, v in urllib.parse.parse_qs(self.query, **self._parse_qsl_args).items()}
+        )
 
     def with_name(self, name):
         """Return a new url with the file name changed."""
-        return super().with_name(urllib.parse.quote(name, safe=''))
+        return super().with_name(urllib.parse.quote(name, safe=""))
 
     def with_suffix(self, suffix):
         """Return a new url with the file suffix changed (or added, if none)."""
-        return super().with_suffix(urllib.parse.quote(suffix, safe='.'))
+        return super().with_suffix(urllib.parse.quote(suffix, safe="."))
 
-    def with_components(self, *, scheme=missing, netloc=missing, username=missing, password=missing, hostname=missing,
-                        port=missing, path=missing, name=missing, query=missing, fragment=missing):
+    def with_components(
+        self,
+        *,
+        scheme=missing,
+        netloc=missing,
+        username=missing,
+        password=missing,
+        hostname=missing,
+        port=missing,
+        path=missing,
+        name=missing,
+        query=missing,
+        fragment=missing,
+    ):
         """Return a new url with components changed."""
         if scheme is missing:
             scheme = self.scheme
@@ -414,7 +405,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
             if not isinstance(name, str):
                 name = str(name)
 
-            path = urllib.parse.urljoin(self.path.rstrip(self._flavour.sep), urllib.parse.quote(name, safe=''))
+            path = urllib.parse.urljoin(self.path.rstrip(self._flavour.sep), urllib.parse.quote(name, safe=""))
 
         elif path is missing:
             path = self.path
@@ -472,7 +463,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         current = self.query
         if not current:
             return self.with_components(query=query)
-        appendix = ''  # suppress lint warnings
+        appendix = ""  # suppress lint warnings
         if isinstance(query, collections.abc.Mapping):
             appendix = urllib.parse.urlencode(sorted(query.items()), **self._urlencode_args)
         elif isinstance(query, collections.abc.Sequence):
@@ -480,7 +471,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         elif query is not None:
             appendix = str(query)
         if appendix:
-            new = '%s&%s' % (current, appendix)
+            new = f"{current}&{appendix}"
             return self.with_components(query=new)
         return self.with_components()
 
@@ -489,14 +480,13 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         return self.with_components(fragment=fragment)
 
     def resolve(self):
-        """Resolve relative path of the path.
-        """
+        """Resolve relative path of the path."""
         path = []
 
         for part in self.parts[1:] if self._drv or self._root else self.parts:
-            if part == '.' or part == '':
+            if part == "." or part == "":
                 pass
-            elif part == '..':
+            elif part == "..":
                 if path:
                     del path[-1]
             else:
@@ -506,9 +496,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
             path.insert(0, self._root.rstrip(self._flavour.sep))
 
         path = self._flavour.join(path)
-        return self.__class__(urllib.parse.urlunsplit((
-            self.scheme, self.netloc, path, self.query, self.fragment
-        )))
+        return self.__class__(urllib.parse.urlunsplit((self.scheme, self.netloc, path, self.query, self.fragment)))
 
     @property
     def jailed(self):
@@ -597,7 +585,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         url = str(self)
         return requests.delete(url, **kwargs)
 
-    def get_text(self, name='', query='', pattern='', overwrite=False):
+    def get_text(self, name="", query="", pattern="", overwrite=False):
         """Runs a url with a specific query, amending query if necessary, and returns the resulting text"""
         q = query if overwrite else self.add_query(query).query if query else self.query
         url = self.joinpath(name) if name else self
@@ -608,13 +596,13 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
                 if isinstance(pattern, str):  # patterns should be a compiled transformer like a regex object
                     pattern = re.compile(pattern)
 
-                return list(filter(pattern.match, res.text.split('\n')))
+                return list(filter(pattern.match, res.text.split("\n")))
 
             return res.text
 
         return res
 
-    def get_json(self, name='', query='', keys='', overwrite=False):
+    def get_json(self, name="", query="", keys="", overwrite=False):
         """Runs a url with a specific query, amending query if necessary, and returns the result after applying a
         transformer"""
         q = query if overwrite else self.add_query(query).query if query else self.query
@@ -623,7 +611,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
 
         if res and keys:
             if not jmespath:
-                raise ImportError('jmespath is not installed')
+                raise ImportError("jmespath is not installed")
 
             if isinstance(keys, str):  # keys should be a compiled transformer like a jamespath object
                 keys = jmespath.compile(keys)
@@ -646,12 +634,12 @@ class JailedURL(URL):
         else:
             root = URL(*args)
 
-        assert root.scheme and root.netloc and not root.query and not root.fragment, 'malformed root: %s' % (root,)
+        assert root.scheme and root.netloc and not root.query and not root.fragment, f"malformed root: {root}"
 
         if not root.path:
-            root = root / '/'
+            root = root / "/"
 
-        return type(cls.__name__, (cls,), {'_chroot': root})._from_parts(args)
+        return type(cls.__name__, (cls,), {"_chroot": root})._from_parts(args)
 
     def _make_child(self, args):
         drv, root, parts = self._parse_args(args)
@@ -672,7 +660,7 @@ class JailedURL(URL):
     def _init(self):
         chroot = self._chroot
 
-        if self._parts[:len(chroot.parts)] != list(chroot.parts):
+        if self._parts[: len(chroot.parts)] != list(chroot.parts):
             self._drv, self._root, self._parts = chroot._drv, chroot._root, chroot._parts[:]
 
         super()._init()
@@ -680,8 +668,10 @@ class JailedURL(URL):
     def resolve(self):
         chroot = self._chroot
 
-        with patch.object(self, '_root', chroot.path), \
-             patch.object(self, '_parts', [''.join(chroot._parts)] + self._parts[len(chroot._parts):]):
+        with (
+            patch.object(self, "_root", chroot.path),
+            patch.object(self, "_parts", ["".join(chroot._parts)] + self._parts[len(chroot._parts) :]),
+        ):
             return super().resolve()
 
     @property

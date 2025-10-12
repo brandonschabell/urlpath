@@ -1,0 +1,30 @@
+name: Release
+on:
+  release:
+    types:
+      - published
+  
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+      
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+      
+      - name: Build package
+        run: uv build
+      
+      - name: Publish package to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.URLPATH_PYPI_TOKEN }}
+          skip-existing: true
