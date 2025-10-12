@@ -835,7 +835,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
             requests.Response object from the HEAD request.
         """
         url = str(self)
-        return requests.options(url, **kwargs)
+        return requests.head(url, **kwargs)
 
     def post(self, data: Any = None, json: Any = None, **kwargs: Any) -> requests.Response:
         """Send a POST request to this URL.
