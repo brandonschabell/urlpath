@@ -84,10 +84,19 @@ select = [
     "C4",  # flake8-comprehensions
     "PIE", # flake8-pie
     "SIM", # flake8-simplify
+    "D",   # pydocstyle (docstring linting)
 ]
 ignore = [
     "E501",  # line too long (handled by formatter)
+    "D203",  # one-blank-line-before-class (conflicts with D211)
+    "D213",  # multi-line-summary-second-line (conflicts with D212)
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]  # Don't require docstrings in tests
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"  # Use Google-style docstrings
 
 [tool.ruff.lint.isort]
 known-first-party = ["urlpath"]
@@ -101,9 +110,9 @@ skip-magic-trailing-comma = false
 python_version = "3.9"
 warn_return_any = false
 warn_unused_configs = true
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-check_untyped_defs = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
 disallow_untyped_decorators = false
 no_implicit_optional = true
 warn_redundant_casts = true

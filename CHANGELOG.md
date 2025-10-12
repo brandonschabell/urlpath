@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated GitHub Actions workflows to use modern actions and UV package manager
 - Modernized code formatting (improved consistency and readability)
 - Centralized all package metadata in `pyproject.toml` (removed from module docstring)
+=- **Updated all docstrings from reStructuredText to Google/NumPy style** (Args/Returns/Raises format)
 
 ### Added
 - `.python-version` file for Python version management
@@ -41,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CHANGELOG.md file (this file)
 - `.github/copilot-instructions.md` for AI-assisted development
 - `uv.lock` for reproducible dependency resolution
+- **`from __future__ import annotations`** for modern type annotation support in Python 3.9+
+- **Complete type annotations** for all 56+ functions, methods, and properties
+- **Comprehensive docstrings** for all public classes, functions, methods, and properties
+- **Pydocstyle linting** (Ruff "D" rules) to enforce documentation consistency
+- **Type annotations for all test functions** (`-> None` return types)
+- **Docstrings for magic methods** (`__str__`, `__bytes__`, etc.)
 
 ### Removed
 - `setup.py` (replaced by `pyproject.toml`)

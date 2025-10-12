@@ -9,7 +9,7 @@ except ImportError:
 from urlpath import URL, JailedURL
 
 
-def test_simple():
+def test_simple() -> None:
     original = "http://www.example.com/path/to/file.ext?query#fragment"
     url = URL(original)
 
@@ -32,7 +32,7 @@ def test_simple():
     assert url.fragment == "fragment"
 
 
-def test_netloc_mixin():
+def test_netloc_mixin() -> None:
     url = URL("https://username:password@secure.example.com:1234/secure/path?query#fragment")
 
     assert url.drive == "https://username:password@secure.example.com:1234"
@@ -44,7 +44,7 @@ def test_netloc_mixin():
     assert url.port == 1234
 
 
-def test_join():
+def test_join() -> None:
     url = URL("http://www.example.com/path/to/file.ext?query#fragment")
 
     assert str(url / "https://secure.example.com/path") == "https://secure.example.com/path"
@@ -52,13 +52,13 @@ def test_join():
     assert str(url.with_name("other_file")) == "http://www.example.com/path/to/other_file"
 
 
-def test_path():
+def test_path() -> None:
     url = URL("http://www.example.com/path/to/file.ext?query#fragment")
 
     assert url.path == "/path/to/file.ext"
 
 
-def test_with():
+def test_with() -> None:
     url = URL("http://www.example.com/path/to/file.exe?query?fragment")
 
     assert str(url.with_scheme("https")) == "https://www.example.com/path/to/file.exe?query?fragment"
@@ -78,7 +78,7 @@ def test_with():
     )
 
 
-def test_query():
+def test_query() -> None:
     query = "field1=value1&field1=value2&field2=hello,%20world%26python"
     url = URL("http://www.example.com/form?" + query)
 
@@ -101,7 +101,7 @@ def test_query():
     assert url.form.get("field4") == ("1", "2", "3")
 
 
-def test_add_query():
+def test_add_query() -> None:
     query = "field1=value1&field1=value2&field2=hello,%20world%26python"
     url = URL("http://www.example.com/form?" + query)
 
@@ -132,13 +132,13 @@ def test_add_query():
     assert url.add_query({}).query == query
 
 
-def test_query_field_order():
+def test_query_field_order() -> None:
     url = URL("http://example.com/").with_query(field1="field1", field2="field2", field3="field3")
 
     assert str(url) == "http://example.com/?field1=field1&field2=field2&field3=field3"
 
 
-def test_fragment():
+def test_fragment() -> None:
     url = URL("http://www.example.com/path/to/file.ext?query#fragment")
 
     assert url.fragment == "fragment"
@@ -149,12 +149,12 @@ def test_fragment():
     assert url.fragment == "new fragment"
 
 
-def test_resolve():
+def test_resolve() -> None:
     url = URL("http://www.example.com//./../path/./..//./file/")
     assert str(url.resolve()) == "http://www.example.com/file"
 
 
-def test_trailing_sep():
+def test_trailing_sep() -> None:
     original = "http://www.example.com/path/with/trailing/sep/"
     url = URL(original)
 
@@ -169,7 +169,7 @@ def test_trailing_sep():
 
 
 @pytest.mark.skipif(webob is None, reason="webob not installed")
-def test_webob():
+def test_webob() -> None:
     base_url = "http://www.example.com"
     url = URL(webob.Request.blank("/webob/request", base_url=base_url))
 
@@ -179,7 +179,7 @@ def test_webob():
 
 
 @pytest.mark.skipif(webob is None, reason="webob not installed")
-def test_webob_jail():
+def test_webob_jail() -> None:
     request = webob.Request.blank("/path/to/filename.ext", {"SCRIPT_NAME": "/app/root"})
 
     assert request.application_url == "http://localhost/app/root"
@@ -191,7 +191,7 @@ def test_webob_jail():
     assert str(url) == "http://localhost/app/root/path/to/filename.ext"
 
 
-def test_jail():
+def test_jail() -> None:
     root = "http://www.example.com/app/"
     current = "http://www.example.com/app/path/to/content"
     url = URL(root).jailed / current
@@ -208,13 +208,13 @@ def test_jail():
     assert str(url / "http://www.example.com/app/path") == "http://www.example.com/app/path"
 
 
-def test_init_with_empty_string():
+def test_init_with_empty_string() -> None:
     url = URL("")
 
     assert str(url) == ""
 
 
-def test_encoding():
+def test_encoding() -> None:
     assert URL("http://www.xn--alliancefranaise-npb.nu/").hostname == "www.alliancefran\xe7aise.nu"
     assert (
         str(URL("http://localhost/").with_hostinfo("www.alliancefran\xe7aise.nu"))
@@ -265,7 +265,7 @@ def test_encoding():
     assert str(URL("http://example.com/file").with_suffix(".///")) == "http://example.com/file.%2F%2F%2F"
 
 
-def test_idempotent():
+def test_idempotent() -> None:
     url = URL(
         "http://\u65e5\u672c\u8a9e\u306e.\u30c9\u30e1\u30a4\u30f3.jp/"
         "path/to/\u30d5\u30a1\u30a4\u30eb.ext?\u30af\u30a8\u30ea"
@@ -277,11 +277,11 @@ def test_idempotent():
     )
 
 
-def test_embed():
+def test_embed() -> None:
     url = URL("http://example.com/").with_fragment(URL("/param1/param2").with_query(f1=1, f2=2))
     assert str(url) == "http://example.com/#/param1/param2?f1=1&f2=2"
 
 
-def test_pchar():
+def test_pchar() -> None:
     url = URL("s3://mybucket") / "some_folder/123_2017-10-30T18:43:11.csv.gz"
     assert str(url) == "s3://mybucket/some_folder/123_2017-10-30T18:43:11.csv.gz"
