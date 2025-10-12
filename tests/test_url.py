@@ -285,3 +285,20 @@ def test_embed() -> None:
 def test_pchar() -> None:
     url = URL("s3://mybucket") / "some_folder/123_2017-10-30T18:43:11.csv.gz"
     assert str(url) == "s3://mybucket/some_folder/123_2017-10-30T18:43:11.csv.gz"
+
+
+def test_percent_encoding_spaces() -> None:
+    """Test that %20 encoded spaces don't get double-encoded."""
+    # Reported bug: URL with %20 in middle of path segment gets double-encoded to %2520
+    url = URL("https://somepath.com/test/Test%20path/my%20test%20file.txt")
+    assert str(url) == "https://somepath.com/test/Test%20path/my%20test%20file.txt"
+
+    # Test various positions of %20
+    assert str(URL("https://somepath.com/Test%20path")) == "https://somepath.com/Test%20path"
+    assert str(URL("https://somepath.com/%20leading")) == "https://somepath.com/%20leading"
+    assert str(URL("https://somepath.com/trailing%20")) == "https://somepath.com/trailing%20"
+    assert str(URL("https://somepath.com/multiple%20spaces%20here")) == "https://somepath.com/multiple%20spaces%20here"
+
+    # Test that actual spaces get encoded properly
+    url_with_spaces = URL("https://somepath.com/test") / "Test path" / "my test file.txt"
+    assert str(url_with_spaces) == "https://somepath.com/test/Test%20path/my%20test%20file.txt"

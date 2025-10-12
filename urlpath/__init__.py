@@ -470,11 +470,12 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
 
         begin = 1 if self._drv or self._root else 0
 
+        # Decode parts before encoding to avoid double-encoding
+        parts = [urllib.parse.unquote(i) for i in self._parts[begin:-1]] + [self.name]
+
         return (
             self._root
-            + self._flavour.sep.join(
-                urllib.parse.quote(i, safe=safe_pchars) for i in self._parts[begin:-1] + [self.name]
-            )
+            + self._flavour.sep.join(urllib.parse.quote(i, safe=safe_pchars) for i in parts)
             + self.trailing_sep
         )
 
