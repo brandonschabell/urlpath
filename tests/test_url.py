@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+from pathlib import PurePosixPath
+from typing import Any, cast
+
 import pytest
 
 try:
@@ -50,6 +53,20 @@ def test_join() -> None:
     assert str(url / "https://secure.example.com/path") == "https://secure.example.com/path"
     assert str(url / "/changed/path") == "http://www.example.com/changed/path"
     assert str(url.with_name("other_file")) == "http://www.example.com/path/to/other_file"
+
+
+def test_join_with_absolute_segment_resets_path() -> None:
+    url = URL("http://example.com/base/path") / "child"
+
+    assert str(url) == "http://example.com/base/path/child"
+    assert str(url / "/absolute") == "http://example.com/absolute"
+    assert str((url / "deeper") / "/absolute/child") == "http://example.com/absolute/child"
+
+
+def test_constructor_with_absolute_segment_resets_path() -> None:
+    url = URL("http://example.com/base", "/absolute/path")
+
+    assert str(url) == "http://example.com/absolute/path"
 
 
 def test_path() -> None:
@@ -212,6 +229,21 @@ def test_init_with_empty_string() -> None:
     url = URL("")
 
     assert str(url) == ""
+
+
+def test_bytes_arguments_are_canonicalized_without_str_roundtrip() -> None:
+    url = URL(b"http://example.com/base")
+
+    assert str(url) == "http://example.com/base"
+    assert str(URL("http://example.com") / cast(Any, b"path")) == "http://example.com/path"
+
+
+def test_pathlike_arguments_are_supported() -> None:
+    pathlike: Any = PurePosixPath("path/like/segment")
+
+    url = URL("http://example.com") / pathlike
+
+    assert str(url) == "http://example.com/path/like/segment"
 
 
 def test_encoding() -> None:

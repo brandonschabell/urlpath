@@ -6,14 +6,23 @@ __all__ = ("URL",)
 
 import collections.abc
 import functools
+import os
+import posixpath
 import re
+import sys
 import urllib.parse
 from collections.abc import Iterator
-from pathlib import PurePath, _PosixFlavour
+from pathlib import PurePath
 from typing import Any, Callable, TypeVar
 from unittest.mock import patch
 
 import requests
+
+# Python 3.12+ removed _PosixFlavour class, replaced with module-based approach
+if sys.version_info >= (3, 12):
+    _PosixFlavour = None  # noqa: F811
+else:
+    from pathlib import _PosixFlavour
 
 try:
     import jmespath
@@ -205,47 +214,163 @@ def netlocjoin(
     return result
 
 
-class _URLFlavour(_PosixFlavour):
-    r"""Custom pathlib flavour for parsing URLs as filesystem paths.
+def _url_splitroot(part: str, sep: str = "/") -> tuple[str, str, str]:
+    """Split a URL into drive (scheme+netloc), root, and path components.
 
-    Extends PosixFlavour to treat URLs as paths by:
-    - Using scheme+netloc as the drive component
-    - Parsing URL components (scheme, netloc, path, query, fragment)
-    - Escaping '/' characters in query and fragment with \\x00
+    Shared implementation for both Python 3.12+ and <3.12 _URLFlavour classes.
+
+    Args:
+        part: URL string to split
+        sep: Path separator (must be '/')
+
+    Returns:
+        Tuple of (drive, root, path) where:
+        - drive is 'scheme://netloc'
+        - root is the leading '/' if present
+        - path is the remainder with query/fragment escaped
     """
+    assert sep == "/"
+    assert "\\x00" not in part
 
-    has_drv = True  # drive is scheme + netloc
-    is_supported = True  # supported in all platform
+    scheme, netloc, path, query, fragment = urllib.parse.urlsplit(part)
 
-    def splitroot(self, part: str, sep: str = _PosixFlavour.sep) -> tuple[str, str, str]:
-        """Split a URL into drive (scheme+netloc), root, and path components.
+    # trick to escape '/' in query and fragment and trailing
+    if not re.match(re.escape(sep) + "+$", path):
+        path = re.sub(f"{re.escape(sep)}+$", lambda m: "\\x00" * len(m.group(0)), path)
+    path = urllib.parse.urlunsplit(("", "", path, query.replace("/", "\\x00"), fragment.replace("/", "\\x00")))
 
-        Args:
-            part: URL string to split
-            sep: Path separator (must be '/')
+    drive = urllib.parse.urlunsplit((scheme, netloc, "", "", ""))
+    match = re.match(f"^({re.escape(sep)}*)(.*)$", path)
+    assert match is not None
+    root, path = match.groups()
 
-        Returns:
-            Tuple of (drive, root, path) where:
-            - drive is 'scheme://netloc'
-            - root is the leading '/' if present
-            - path is the remainder with query/fragment escaped
+    return drive, root, path
+
+
+# Python 3.12+ compatibility: create flavour class or simple object
+if sys.version_info >= (3, 12):
+    # Python 3.12+: _flavour is a module, we create a simple object with required attributes
+    class _URLFlavour:
+        r"""Custom pathlib flavour for parsing URLs as filesystem paths (Python 3.12+).
+
+        Provides required attributes and methods for pathlib compatibility:
+        - sep: path separator ('/')
+        - splitroot: URL parsing function
+        - has_drv, is_supported: configuration flags
+        - join: path joining method
+        - normcase: case normalization method
         """
-        assert sep == self.sep
-        assert "\\x00" not in part
 
-        scheme, netloc, path, query, fragment = urllib.parse.urlsplit(part)
+        sep = "/"
+        altsep = None
+        has_drv = True
+        is_supported = True
 
-        # trick to escape '/' in query and fragment and trailing
-        if not re.match(re.escape(sep) + "+$", path):
-            path = re.sub(f"{re.escape(sep)}+$", lambda m: "\\x00" * len(m.group(0)), path)
-        path = urllib.parse.urlunsplit(("", "", path, query.replace("/", "\\x00"), fragment.replace("/", "\\x00")))
+        def splitroot(self, part: str, sep: str = "/") -> tuple[str, str, str]:
+            """Split a URL into drive (scheme+netloc), root, and path components.
 
-        drive = urllib.parse.urlunsplit((scheme, netloc, "", "", ""))
-        match = re.match(f"^({re.escape(sep)}*)(.*)$", path)
-        assert match is not None
-        root, path = match.groups()
+            Args:
+                part: URL string to split
+                sep: Path separator (must be '/')
 
-        return drive, root, path
+            Returns:
+                Tuple of (drive, root, path) where:
+                - drive is 'scheme://netloc'
+                - root is the leading '/' if present
+                - path is the remainder with query/fragment escaped
+            """
+            return _url_splitroot(part, sep)
+
+        def join(self, *paths: str | list[str]) -> str:
+            """Join path components with separator.
+
+            Args:
+                *paths: Path components to join (can be individual strings or a list)
+
+            Returns:
+                Joined path string
+            """
+            flat_parts: list[str] = []
+            for part in paths:
+                if isinstance(part, list):
+                    flat_parts.extend(part)
+                else:
+                    flat_parts.append(part)
+
+            if not flat_parts:
+                return ""
+
+            result = flat_parts[0]
+
+            for segment in flat_parts[1:]:
+                if not segment:
+                    continue
+
+                seg_drv, seg_root, _ = _url_splitroot(segment)
+                if seg_drv:
+                    # Absolute URL replaces everything
+                    result = segment
+                    continue
+
+                if seg_root:
+                    # Absolute path keeps existing drive if present
+                    res_drv, _, _ = _url_splitroot(result)
+                    segment_clean = segment.replace("\\x00", "/")
+                    result = res_drv + segment_clean if res_drv else segment_clean
+                    continue
+
+                res_drv, res_root, res_tail = _url_splitroot(result)
+                if res_drv or res_root:
+                    base_path = (res_root + res_tail).replace("\\x00", "/")
+                    segment_clean = segment.replace("\\x00", "/")
+                    joined = posixpath.join(base_path, segment_clean)
+                    if res_drv and not joined.startswith("/"):
+                        joined = "/" + joined
+                    result = res_drv + joined
+                else:
+                    result = posixpath.join(result.replace("\\x00", "/"), segment.replace("\\x00", "/"))
+
+            return result
+
+        def normcase(self, path: str) -> str:
+            """Normalize path case (URLs are case-sensitive).
+
+            Args:
+                path: Path to normalize
+
+            Returns:
+                Path unchanged (URLs are case-sensitive)
+            """
+            return path
+
+else:
+    # Python 3.9-3.11: Inherit from _PosixFlavour class
+    class _URLFlavour(_PosixFlavour):
+        r"""Custom pathlib flavour for parsing URLs as filesystem paths.
+
+        Extends PosixFlavour to treat URLs as paths by:
+        - Using scheme+netloc as the drive component
+        - Parsing URL components (scheme, netloc, path, query, fragment)
+        - Escaping '/' characters in query and fragment with \\x00
+        """
+
+        has_drv = True  # drive is scheme + netloc
+        is_supported = True  # supported in all platform
+
+        def splitroot(self, part: str, sep: str = _PosixFlavour.sep) -> tuple[str, str, str]:
+            """Split a URL into drive (scheme+netloc), root, and path components.
+
+            Args:
+                part: URL string to split
+                sep: Path separator (must be '/')
+
+            Returns:
+                Tuple of (drive, root, path) where:
+                - drive is 'scheme://netloc'
+                - root is the leading '/' if present
+                - path is the remainder with query/fragment escaped
+            """
+            return _url_splitroot(part, sep)
 
 
 class URL(urllib.parse._NetlocResultMixinStr, PurePath):
@@ -276,24 +401,183 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
     _parse_qsl_args: dict[str, Any] = {}
     _urlencode_args: dict[str, Any] = {"doseq": True}
 
+    def __new__(cls, *args: Any) -> URL:
+        """Create a new URL instance, canonicalizing arguments in Python 3.12+.
+
+        In Python 3.12, PurePath validation is stricter. We canonicalize arguments
+        (webob.Request, SplitResult, etc.) to strings before parent processing.
+
+        Args:
+            *args: URL components (strings, SplitResult, ParseResult, or webob.Request)
+
+        Returns:
+            New URL instance
+        """
+        if sys.version_info >= (3, 12):
+            # Python 3.12: Canonicalize for stricter PurePath validation
+            # Note: This happens BEFORE _parse_args, so it's not redundant
+            canonicalized_args = tuple(cls._canonicalize_arg(a) for a in args)
+            return super().__new__(cls, *canonicalized_args)
+        else:
+            # Python < 3.12: No early validation, canonicalization happens in _parse_args
+            return super().__new__(cls, *args)
+
+    def __init__(self, *args: Any) -> None:
+        """Initialize URL instance.
+
+        In Python 3.12+, PurePath.__init__ is called and we need to canonicalize args.
+        Note: __init__ receives the ORIGINAL args, not the canonicalized ones from __new__.
+        In Python <3.12, PurePath.__init__ is object.__init__ (does nothing).
+
+        Args:
+            *args: URL components (need to be canonicalized again for Python 3.12)
+        """
+        if sys.version_info >= (3, 12):
+            # Python 3.12: Must canonicalize args again (__init__ gets original args)
+            canonicalized_args = tuple(self._canonicalize_arg(a) for a in args)
+            super().__init__(*canonicalized_args)
+        # else: Python < 3.12 doesn't call parent __init__ (it's object.__init__)
+
+    # Python 3.12 compatibility: _parts was replaced with _tail_cached
+    if sys.version_info >= (3, 12):
+
+        @property
+        def _parts(self) -> list[str]:  # type: ignore[misc]
+            """Compatibility property for Python 3.12+ with manual caching.
+
+            In Python 3.12, pathlib uses _tail_cached instead of _parts. This property
+            reconstructs the _parts list from _drv, _root, and _tail_cached for
+            backward compatibility with pre-3.12 code.
+
+            The result is cached in _parts_cache to avoid rebuilding on every access.
+            Cache is cleared when _parts is set via the setter.
+
+            Returns:
+                List of path components, with first element containing drive+root
+            """
+            # Check if we have a cached value
+            if hasattr(self, "_parts_cache"):
+                return self._parts_cache  # type: ignore[return-value]
+
+            self._ensure_parts_loaded()
+            # In Python 3.12, the structure is: _raw_paths contains input,
+            # and _tail_cached contains parsed components
+            # We need to reconstruct the old _parts format: [drive_and_root, ...tail]
+            # Also clean up \x00 escape in the last part (converts to /)
+            parts: list[str]
+            if self._drv or self._root:
+                # Has drive/root: first element is drive+root
+                parts = [self._drv + self._root] + list(self._tail_cached)
+            else:
+                # No drive/root: just the tail
+                parts = list(self._tail_cached)
+
+            # Clean up \x00 escape in last part (used to escape / in query/fragment/trailing)
+            if parts:
+                parts[-1] = parts[-1].replace("\\x00", "/")
+
+            # Cache the result for future access
+            object.__setattr__(self, "_parts_cache", parts)
+            return parts
+
+        @_parts.setter
+        def _parts(self, value: list[str]) -> None:  # type: ignore[misc]
+            """Compatibility setter for Python 3.12+.
+
+            Converts _parts list back to _tail_cached tuple. Clears the cache
+            to ensure the next read uses the new value.
+
+            Args:
+                value: New _parts list to set
+            """
+            # Clear the cache when setting new value
+            if hasattr(self, "_parts_cache"):
+                object.__delattr__(self, "_parts_cache")
+
+            # When setting _parts, we need to update _tail_cached
+            if value and (self._drv or self._root):
+                # First element contains drive+root, rest is tail
+                object.__setattr__(self, "_tail_cached", tuple(value[1:]))
+            else:
+                object.__setattr__(self, "_tail_cached", tuple(value))
+
     @classmethod
     def _from_parts(cls, args: Any) -> URL:
-        ret = super()._from_parts(args)
+        """Create URL from parts, handling Python 3.12 changes.
+
+        In Python 3.12, _from_parts was removed from the base class.
+
+        Args:
+            args: URL components to construct from
+
+        Returns:
+            New URL instance
+        """
+        if sys.version_info >= (3, 12):
+            # Python 3.12 removed _from_parts, use direct construction
+            ret = cls(*args)
+        else:
+            ret = super()._from_parts(args)
         ret._init()
         return ret
 
     @classmethod
     def _from_parsed_parts(cls, drv: str, root: str, parts: list[str]) -> URL:
-        ret = super()._from_parsed_parts(drv, root, parts)
+        """Create URL from pre-parsed drive, root, and path parts.
+
+        Python 3.12 changed this from a classmethod to an instance method,
+        requiring manual instance creation and attribute setting.
+
+        Args:
+            drv: Drive component (scheme+netloc)
+            root: Root component (leading '/')
+            parts: List of path components
+
+        Returns:
+            New URL instance
+        """
+        # Python 3.12 changed _from_parsed_parts from classmethod to instance method
+        # Signature changed from (drv, root, parts) to (self, drv, root, tail)
+        if sys.version_info >= (3, 12):
+            # In Python 3.12, we need to create an instance first and set _raw_paths
+            self = object.__new__(cls)
+            # Reconstruct the path string for _raw_paths
+            path_str = drv + root + "/".join(parts) if parts else drv + root
+            object.__setattr__(self, "_raw_paths", [path_str])
+            # Now call the instance method which will set _drv, _root, _tail_cached
+            super(URL, self)._from_parsed_parts(drv, root, tuple(parts))
+            ret = self
+        else:
+            ret = super()._from_parsed_parts(drv, root, parts)
         ret._init()
         return ret
 
     @classmethod
     def _parse_args(cls, args: Any) -> Any:
+        """Parse and canonicalize URL construction arguments.
+
+        Converts webob.Request, SplitResult, ParseResult to strings.
+
+        Args:
+            args: Raw arguments to parse
+
+        Returns:
+            Parsed arguments suitable for parent class
+        """
         return super()._parse_args(cls._canonicalize_arg(a) for a in args)
 
     @classmethod
     def _canonicalize_arg(cls, a: Any) -> str:
+        """Convert various URL-like objects to strings.
+
+        Handles urllib.parse result objects, webob.Request, and other types.
+
+        Args:
+            a: Argument to canonicalize (SplitResult, ParseResult, Request, etc.)
+
+        Returns:
+            String representation of the URL
+        """
         if isinstance(a, urllib.parse.SplitResult):
             return urllib.parse.urlunsplit(a)
 
@@ -303,9 +587,48 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         if webob and isinstance(a, webob.Request):
             return a.url
 
-        return a
+        if isinstance(a, str):
+            return a
+
+        if isinstance(a, bytes):
+            return a.decode("utf-8")
+
+        if hasattr(a, "__fspath__"):
+            fspath = os.fspath(a)
+            if isinstance(fspath, bytes):
+                return fspath.decode("utf-8")
+            return fspath
+
+        # Fall back to string conversion for other objects (including URL instances)
+        return str(a)
+
+    def _ensure_parts_loaded(self) -> None:
+        """Ensure internal path parts are loaded (Python 3.12+ compatibility).
+
+        In Python 3.12, pathlib uses lazy loading. This method checks if
+        _tail_cached is loaded and calls _load_parts() if needed.
+
+        Note: We check _tail_cached instead of _parts to avoid recursion since
+        _parts is a property that calls this method.
+        """
+        if sys.version_info >= (3, 12) and hasattr(self, "_load_parts"):
+            # In Python 3.12+, _drv/_root/_tail_cached are lazy-loaded
+            # Check if _tail_cached exists (not _parts to avoid recursion)
+            try:
+                _ = self._tail_cached  # type: ignore[attr-defined]
+            except AttributeError:
+                self._load_parts()  # type: ignore[attr-defined]
 
     def _init(self) -> None:
+        r"""Initialize URL-specific attributes after construction.
+
+        Loads parts (Python 3.12+) and cleans up escape sequences in the
+        last path component (converting \x00 back to /).
+        """
+        # Python 3.12+: Must call _load_parts() to initialize _drv, _root, _parts
+        if sys.version_info >= (3, 12) and hasattr(self, "_load_parts"):
+            self._load_parts()  # type: ignore[attr-defined]
+
         if self._parts:
             # trick to escape '/' in query and fragment and trailing
             self._parts[-1] = self._parts[-1].replace("\\x00", "/")
@@ -314,6 +637,94 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         # replace by parts that have no query and have no fragment
         with patch.object(self, "_parts", list(self.parts)):
             return super()._make_child(args)
+
+    def _handle_absolute_url_in_joinpath(
+        self, canonicalized_segments: tuple[str, ...], start_index: int = 0
+    ) -> tuple[bool, URL | None, int]:
+        """Check if segments contain an absolute URL (with scheme).
+
+        Args:
+            canonicalized_segments: Canonicalized path segments
+            start_index: Index to start checking from
+
+        Returns:
+            Tuple of (found, result_url, next_index):
+            - found: True if absolute URL found
+            - result_url: New URL constructed from absolute URL + remaining segments
+            - next_index: Index after the absolute URL (for further processing)
+        """
+        for i in range(start_index, len(canonicalized_segments)):
+            seg_str = canonicalized_segments[i]
+            parsed = urllib.parse.urlsplit(seg_str)
+            if parsed.scheme:
+                # This segment has a scheme, it replaces everything
+                return (True, type(self)(seg_str, *canonicalized_segments[i + 1 :]), i + 1)
+        return (False, None, start_index)
+
+    def joinpath(self, *pathsegments: Any) -> URL:
+        """Join path segments to create a new URL.
+
+        Supports various input types: strings, URLs, webob.Request objects.
+        Handles absolute URLs (with scheme) and absolute paths (starting with /).
+
+        - Absolute URLs (e.g., 'http://other.com/path') replace the entire URL
+        - Absolute paths (e.g., '/root') replace the path but keep scheme/netloc
+        - Relative paths are joined to the current path
+
+        Args:
+            *pathsegments: Path segments to join (strings, URLs, or webob.Request)
+
+        Returns:
+            New URL with joined paths
+
+        Examples:
+            >>> url = URL('http://example.com/path')
+            >>> str(url / 'to' / 'file.txt')
+            'http://example.com/path/to/file.txt'
+            >>> str(url / '/absolute')
+            'http://example.com/absolute'
+        """
+        if sys.version_info >= (3, 12):
+            # Python 3.12: Manually implement join logic
+            # First, canonicalize all segments (handles webob.Request, etc.)
+            canonicalized_segments = tuple(self._canonicalize_arg(seg) for seg in pathsegments)
+
+            # Check if any segment is an absolute URL (has a scheme)
+            found, result, _ = self._handle_absolute_url_in_joinpath(canonicalized_segments)
+            if found:
+                return result  # type: ignore[return-value]
+
+            # Check for absolute paths (starting with /)
+            for seg_str in canonicalized_segments:
+                if seg_str.startswith("/"):
+                    # Absolute path - replace path but keep scheme/netloc
+                    return type(self)(
+                        urllib.parse.urlunsplit(
+                            (
+                                self.scheme,
+                                self.netloc,
+                                seg_str,
+                                "",  # no query
+                                "",  # no fragment
+                            )
+                        )
+                    )
+
+            # No absolute URLs/paths, do normal joining
+            # Strip query/fragment from self first
+            clean_url_str = urllib.parse.urlunsplit(
+                (
+                    self.scheme,
+                    self.netloc,
+                    self.path,
+                    "",  # no query
+                    "",  # no fragment
+                )
+            )
+            # Create new URL by joining paths (use canonicalized segments)
+            return type(self)(clean_url_str, *canonicalized_segments)
+        else:
+            return super().joinpath(*pathsegments)
 
     @cached_property
     def __str__(self) -> str:
@@ -348,6 +759,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Returns:
             Tuple of decoded path components.
         """
+        self._ensure_parts_loaded()
         if self._drv or self._root:
             return tuple([self._parts[0]] + [urllib.parse.unquote(i) for i in self._parts[1:-1]] + [self.name])
         else:
@@ -373,6 +785,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Returns:
             The scheme component of the URL.
         """
+        self._ensure_parts_loaded()
         return urllib.parse.urlsplit(self._drv).scheme
 
     @property
@@ -388,11 +801,13 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
     @property
     @cached_property
     def _userinfo(self) -> tuple[str | None, str | None]:
+        self._ensure_parts_loaded()
         return urllib.parse.urlsplit(self._drv)._userinfo
 
     @property
     @cached_property
     def _hostinfo(self) -> tuple[str | None, int | None]:
+        self._ensure_parts_loaded()
         return urllib.parse.urlsplit(self._drv)._hostinfo
 
     @property
@@ -468,6 +883,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         # https://tools.ietf.org/html/rfc3986#appendix-A
         safe_pchars = "-._~!$&'()*+,;=:@"
 
+        self._ensure_parts_loaded()
         begin = 1 if self._drv or self._root else 0
 
         # Decode parts before encoding to avoid double-encoding
@@ -493,6 +909,9 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
             Tuple of (path, query, fragment) strings.
         """
         full_name = super().name
+        # In Python 3.12, super().name may have \x00 escape, clean it up
+        if sys.version_info >= (3, 12):
+            full_name = full_name.replace("\\x00", "/")
 
         # Fragment takes priority - everything after # is fragment
         fragment_idx = full_name.find("#")
@@ -813,6 +1232,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Returns:
             A new URL with normalized path (no relative components).
         """
+        self._ensure_parts_loaded()
         path: list[str] = []
 
         for part in self.parts[1:] if self._drv or self._root else self.parts:
@@ -1022,6 +1442,53 @@ class JailedURL(URL):
 
         return type(cls.__name__, (cls,), {"_chroot": root})._from_parts(args)
 
+    def __init__(self, *args: Any, root: Any = None) -> None:
+        """Override __init__ to consume the root keyword argument.
+
+        In Python 3.12, PurePath.__init__ doesn't accept keyword arguments,
+        so we need to consume them here and canonicalize args.
+
+        Args:
+            *args: URL arguments (need canonicalization in Python 3.12)
+            root: The root URL (handled in __new__)
+        """
+        # The root argument is already handled in __new__
+        # In Python < 3.12, PurePath.__init__ does nothing, so we can't pass args
+        # In Python 3.12, we need to canonicalize and pass args (without root kwarg)
+        if sys.version_info >= (3, 12):
+            # Must canonicalize args (__init__ receives original args)
+            canonicalized_args = tuple(self._canonicalize_arg(a) for a in args)
+            super().__init__(*canonicalized_args)
+        # else: do nothing, PurePath.__init__ is object.__init__ which takes no args
+
+    @classmethod
+    def _from_parts(cls, args: Any) -> URL:
+        """Override _from_parts to avoid recursion in JailedURL.__new__.
+
+        In Python 3.12, calling cls(*args) would trigger __new__ which creates
+        a dynamic subclass and calls _from_parts again, causing infinite recursion.
+        Instead, we use object.__new__ directly.
+        """
+        if sys.version_info >= (3, 12):
+            # Create instance using object.__new__ to bypass __new__
+            self = object.__new__(cls)
+            # Set _raw_paths which is required for _load_parts
+            # Canonicalize args (handles webob.Request, etc.)
+            if args:
+                object.__setattr__(self, "_raw_paths", [cls._canonicalize_arg(arg) for arg in args])
+            else:
+                object.__setattr__(self, "_raw_paths", [])
+            # Copy _chroot from the class if it exists
+            if hasattr(cls, "_chroot"):
+                object.__setattr__(self, "_chroot", cls._chroot)
+            self._init()
+            return self
+        else:
+            # Python < 3.12: Use parent implementation
+            ret = super()._from_parts(args)
+            ret._init()
+            return ret
+
     def _make_child(self, args: Any) -> URL:
         drv, root, parts = self._parse_args(args)
         chroot = self._chroot
@@ -1039,24 +1506,142 @@ class JailedURL(URL):
 
         return self._from_parsed_parts(drv, root, parts)
 
+    def joinpath(self, *pathsegments: Any) -> JailedURL:
+        """Join path segments to create a new jailed URL.
+
+        For JailedURL, behavior differs from regular URL for security:
+        - Absolute paths (starting with /) are relative to the chroot, not the domain
+        - Full URLs (with scheme) are accepted but will be constrained to chroot in _init
+        - Navigation outside the jail (via '..') is prevented by _init
+
+        Args:
+            *pathsegments: Path segments to join (strings, URLs, or webob.Request)
+
+        Returns:
+            New jailed URL with joined paths, constrained within the jail
+
+        Examples:
+            >>> root = URL('http://example.com/app/')
+            >>> jail = JailedURL('http://example.com/app/content', root=root)
+            >>> str(jail / '/data')  # Absolute path is relative to /app/
+            'http://example.com/app/data'
+            >>> str(jail / '../../escape')  # Prevented by _init
+            'http://example.com/app/'
+        """
+        if sys.version_info >= (3, 12):
+            chroot = self._chroot
+            assert chroot is not None  # Always set by __new__
+
+            # Canonicalize all segments (handles webob.Request, etc.)
+            canonicalized_segments = tuple(self._canonicalize_arg(seg) for seg in pathsegments)
+
+            # Check if any segment is an absolute URL (has a scheme)
+            # Reuse parent's helper method for absolute URL detection
+            found, result, _ = self._handle_absolute_url_in_joinpath(canonicalized_segments)
+            if found:
+                return result  # type: ignore[return-value]
+
+            # Check for absolute paths (starting with /)
+            # For jailed URLs, these are relative to chroot, not domain
+            for i, seg_str in enumerate(canonicalized_segments):
+                if seg_str.startswith("/"):
+                    # Absolute path - join to chroot instead of self
+                    chroot_url_str = urllib.parse.urlunsplit(
+                        (
+                            chroot.scheme,
+                            chroot.netloc,
+                            chroot.path,
+                            "",  # no query
+                            "",  # no fragment
+                        )
+                    )
+                    # Join the absolute path (with / stripped) to chroot
+                    return type(self)(chroot_url_str, seg_str.lstrip("/"), *canonicalized_segments[i + 1 :])
+
+            # No absolute paths, do normal joining
+            clean_url_str = urllib.parse.urlunsplit(
+                (
+                    self.scheme,
+                    self.netloc,
+                    self.path,
+                    "",  # no query
+                    "",  # no fragment
+                )
+            )
+            return type(self)(clean_url_str, *canonicalized_segments)
+        else:
+            # Python < 3.12: use _make_child which handles jailed logic
+            result: JailedURL = super().joinpath(*pathsegments)  # type: ignore[assignment]
+            return result
+
     def _init(self) -> None:
+        # Python 3.12+: Must call _load_parts() to initialize _drv, _root, _parts
+        if sys.version_info >= (3, 12) and hasattr(self, "_load_parts"):
+            self._load_parts()  # type: ignore[attr-defined]
+
         chroot = self._chroot
         assert chroot is not None  # Always set by __new__
 
         if self._parts[: len(chroot.parts)] != list(chroot.parts):  # type: ignore[has-type]
             self._drv, self._root, self._parts = chroot._drv, chroot._root, chroot._parts[:]
+            # Python 3.12: Also update _raw_paths to reflect the corrected path
+            if sys.version_info >= (3, 12):
+                # Use the string representation of chroot as the new path
+                object.__setattr__(self, "_raw_paths", [str(chroot)])
+                # Clear _parts_cache since we updated _parts
+                if hasattr(self, "_parts_cache"):
+                    object.__delattr__(self, "_parts_cache")
+                # Clear other cached properties that depend on the path
+                if hasattr(self, "_str"):
+                    object.__delattr__(self, "_str")
+                if hasattr(self, "_tail_cached"):
+                    object.__setattr__(self, "_tail_cached", tuple(chroot._parts))
 
         super()._init()
 
     def resolve(self) -> URL:
+        """Resolve relative path components (like '..') within the jail.
+
+        Creates a fake filesystem-like structure where the chroot appears as the
+        root directory. This allows pathlib's resolve() to process '..' correctly
+        while keeping the result within the jail boundaries.
+
+        In Python 3.12, we patch _parts_cache directly to avoid issues with the
+        cached property returning incorrect values based on the real _drv/_root.
+
+        Returns:
+            Resolved URL with '..' components processed, staying within chroot
+        """
         chroot = self._chroot
         assert chroot is not None  # Always set by __new__
 
-        with (
-            patch.object(self, "_root", chroot.path),
-            patch.object(self, "_parts", ["".join(chroot._parts)] + self._parts[len(chroot._parts) :]),
-        ):
-            return super().resolve()
+        if sys.version_info >= (3, 12):
+            # Python 3.12: _parts is a property computed from _drv, _root, _tail_cached
+            # The resolve logic for jailed URLs needs _parts to look like:
+            # ["http://example.com/app/", "path", "to", "content", "..", "file"]
+            # This maps to:
+            # - _drv = "" (empty, no URL scheme/netloc drive)
+            # - _root = "http://example.com/app/" (the chroot as a fake filesystem root)
+            # - _tail_cached = ("path", "to", "content", "..", "file")
+            chroot_root_str = "".join(chroot._parts)  # Join chroot parts into one string
+            tail_parts = self._parts[len(chroot.parts) :]  # Get parts after chroot
+
+            # Build the _parts list that resolve() expects
+            fake_parts = [chroot_root_str] + tail_parts
+
+            with (
+                patch.object(self, "_drv", ""),
+                patch.object(self, "_root", chroot_root_str),
+                patch.object(self, "_tail_cached", tuple(tail_parts)),
+                patch.object(self, "_parts_cache", fake_parts),  # Directly patch the cache
+            ):
+                return super().resolve()
+        else:
+            with (
+                patch.object(self, "_root", chroot.path),
+                patch.object(self, "_parts", ["".join(chroot._parts)] + self._parts[len(chroot._parts) :]),
+            ):
+                return super().resolve()
 
     @property
     def chroot(self) -> URL:
