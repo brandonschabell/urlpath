@@ -481,13 +481,48 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
 
     @property
     @cached_property
+    def _name_parts(self) -> tuple[str, str, str]:
+        """Parse super().name into (path, query, fragment) without using urlsplit.
+
+        We can't use urlsplit here because it treats colons as scheme separators,
+        which breaks filenames like 'abc:def.html'.
+
+        Parsing order: fragment first (after #), then query (after ?), then path.
+
+        Returns:
+            Tuple of (path, query, fragment) strings.
+        """
+        full_name = super().name
+
+        # Fragment takes priority - everything after # is fragment
+        fragment_idx = full_name.find("#")
+        if fragment_idx != -1:
+            fragment = full_name[fragment_idx + 1 :]
+            before_fragment = full_name[:fragment_idx]
+        else:
+            fragment = ""
+            before_fragment = full_name
+
+        # Query is everything after ? (but before #)
+        query_idx = before_fragment.find("?")
+        if query_idx != -1:
+            query = before_fragment[query_idx + 1 :]
+            path = before_fragment[:query_idx]
+        else:
+            query = ""
+            path = before_fragment
+
+        return path, query, fragment
+
+    @property
+    @cached_property
     def name(self) -> str:
         """Final path component (filename), decoded and without query/fragment.
 
         Returns:
             The decoded filename or last path segment.
         """
-        return urllib.parse.unquote(urllib.parse.urlsplit(super().name).path.rstrip(self._flavour.sep))
+        return urllib.parse.unquote(self._name_parts[0].rstrip(self._flavour.sep))
 
     @property
     @cached_property
@@ -497,7 +532,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Returns:
             The raw query string (without the leading '?').
         """
-        return urllib.parse.urlsplit(super().name).query
+        return self._name_parts[1]
 
     @property
     @cached_property
@@ -507,7 +542,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Returns:
             The fragment string (without the leading '#').
         """
-        return urllib.parse.urlsplit(super().name).fragment
+        return self._name_parts[2]
 
     @property
     @cached_property
@@ -517,7 +552,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Returns:
             The trailing '/' characters, or empty string if none.
         """
-        match = re.search("(" + re.escape(self._flavour.sep) + "*)$", urllib.parse.urlsplit(super().name).path)
+        match = re.search("(" + re.escape(self._flavour.sep) + "*)$", self._name_parts[0])
         assert match is not None
         return match.group(0)
 

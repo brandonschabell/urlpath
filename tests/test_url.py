@@ -302,3 +302,25 @@ def test_percent_encoding_spaces() -> None:
     # Test that actual spaces get encoded properly
     url_with_spaces = URL("https://somepath.com/test") / "Test path" / "my test file.txt"
     assert str(url_with_spaces) == "https://somepath.com/test/Test%20path/my%20test%20file.txt"
+
+
+def test_colon_in_filename() -> None:
+    """Test that colons in filenames are not treated as scheme separators."""
+    # Reported bug: URL('http://www.example.com/abc:def.html') was truncated to 'http://www.example.com/def.html'
+    url = URL("http://www.example.com/abc:def.html")
+    assert str(url) == "http://www.example.com/abc:def.html"
+    assert url.name == "abc:def.html"
+    assert url.path == "/abc:def.html"
+
+    # Test various positions and uses of colons
+    assert str(URL("http://www.example.com/file:name.txt")) == "http://www.example.com/file:name.txt"
+    assert str(URL("http://www.example.com/path/to/file:v2.html")) == "http://www.example.com/path/to/file:v2.html"
+    assert str(URL("http://www.example.com/:colon.txt")) == "http://www.example.com/:colon.txt"
+    assert str(URL("http://www.example.com/colon:.txt")) == "http://www.example.com/colon:.txt"
+
+    # Test with query and fragment
+    url = URL("http://www.example.com/abc:def.html?key=value#frag")
+    assert url.name == "abc:def.html"
+    assert url.query == "key=value"
+    assert url.fragment == "frag"
+    assert str(url) == "http://www.example.com/abc:def.html?key=value#frag"
