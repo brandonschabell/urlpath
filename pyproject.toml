@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "urlpath"
-version = "1.2.0"
+version = "2.0.0"
 description = "Object-oriented URL from urllib.parse and pathlib"
 readme = "README.md"
 license = "MIT"
