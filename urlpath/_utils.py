@@ -240,4 +240,4 @@ def cleanup_escapes(text: str) -> str:
     Returns:
         String with \x00 replaced by /
     """
-    return text.replace("\\x00", "/")
+    return text.replace("\x00", "/").replace("\\x00", "/").replace("%5Cx00", "/").replace("%5cx00", "/")

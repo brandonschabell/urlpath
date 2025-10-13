@@ -73,17 +73,19 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Returns:
             New URL instance
         """
+        canonicalized_args = tuple(cls._canonicalize_arg(a) for a in args)
+
+        if len(canonicalized_args) > 1:
+            canonicalized_args = cls._combine_args(canonicalized_args)
+
         if IS_PY312_PLUS:
             # Python 3.12: Canonicalize for stricter PurePath validation
             # Note: This happens BEFORE _parse_args, so it's not redundant
-            canonicalized_args = tuple(cls._canonicalize_arg(a) for a in args)
-            if len(canonicalized_args) > 1:
-                combined = cls._combine_args(canonicalized_args)
-                return super().__new__(cls, *combined)
             return super().__new__(cls, *canonicalized_args)
-        else:
-            # Python < 3.12: No early validation, canonicalization happens in _parse_args
-            return super().__new__(cls, *args)
+
+        # Python < 3.12: Parent class will still invoke _parse_args, but we feed it
+        # the canonicalized arguments so multi-argument construction matches joinpath.
+        return super().__new__(cls, *canonicalized_args)
 
     def __init__(self, *args: Any) -> None:
         """Initialize URL instance.
@@ -105,25 +107,24 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
                 super().__init__(*canonicalized_args)
         # else: Python < 3.12 doesn't call parent __init__ (it's object.__init__)
 
-    if IS_PY312_PLUS:
+    @classmethod
+    def _combine_args(cls, canonicalized_args: tuple[str, ...]) -> tuple[str, ...]:
+        """Combine raw constructor arguments to emulate legacy joining semantics."""
+        if not canonicalized_args:
+            return canonicalized_args
 
-        @classmethod
-        def _combine_args(cls, canonicalized_args: tuple[str, ...]) -> tuple[str, ...]:
-            """Combine raw constructor arguments to emulate legacy joining semantics."""
-            if not canonicalized_args:
-                return canonicalized_args
+        current = canonicalized_args[0]
+        for seg in canonicalized_args[1:]:
+            parsed_current = urllib.parse.urlsplit(current)
+            parsed_segment = urllib.parse.urlsplit(seg)
 
-            current = canonicalized_args[0]
-            for seg in canonicalized_args[1:]:
-                parsed_current = urllib.parse.urlsplit(current)
-                parsed_segment = urllib.parse.urlsplit(seg)
+            if parsed_segment.scheme:
+                current = cleanup_escapes(urllib.parse.urlunsplit(parsed_segment))
+                continue
 
-                if parsed_segment.scheme:
-                    current = urllib.parse.urlunsplit(parsed_segment)
-                    continue
-
-                if seg.startswith("/"):
-                    current = urllib.parse.urlunsplit(
+            if seg.startswith("/"):
+                current = cleanup_escapes(
+                    urllib.parse.urlunsplit(
                         (
                             parsed_current.scheme,
                             parsed_current.netloc,
@@ -132,17 +133,19 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
                             parsed_segment.fragment,
                         )
                     )
-                    continue
+                )
+                continue
 
-                base_path = parsed_current.path or ("/" if parsed_current.netloc else "")
-                joined_path = posixpath.join(base_path, seg)
-                if joined_path == ".":
-                    joined_path = ""
-                else:
-                    parts = joined_path.split("/")
-                    if "." in parts:
-                        joined_path = "/".join(part for part in parts if part != ".")
-                current = urllib.parse.urlunsplit(
+            base_path = parsed_current.path or ("/" if parsed_current.netloc else "")
+            joined_path = posixpath.join(base_path, seg)
+            if joined_path == ".":
+                joined_path = ""
+            else:
+                parts = joined_path.split("/")
+                if "." in parts:
+                    joined_path = "/".join(part for part in parts if part != ".")
+            current = cleanup_escapes(
+                urllib.parse.urlunsplit(
                     (
                         parsed_current.scheme,
                         parsed_current.netloc,
@@ -151,8 +154,11 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
                         "",
                     )
                 )
+            )
 
-            return (current,)
+        return (cleanup_escapes(current),)
+
+    if IS_PY312_PLUS:
 
         @classmethod
         def _parse_path(cls, path: str) -> tuple[str, str, list[str]]:
@@ -306,7 +312,10 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Returns:
             Parsed arguments suitable for parent class
         """
-        return super()._parse_args(cls._canonicalize_arg(a) for a in args)
+        canonicalized = tuple(cls._canonicalize_arg(a) for a in args)
+        if len(canonicalized) > 1:
+            canonicalized = cls._combine_args(canonicalized)
+        return super()._parse_args(canonicalized)
 
     @classmethod
     def _canonicalize_arg(cls, a: Any) -> str:

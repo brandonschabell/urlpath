@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
+import urllib.parse
 from pathlib import PurePosixPath
 from typing import Any, cast
 
 import pytest
-
-try:
-    import webob
-except ImportError:
-    webob = None
+import webob
 
 from urlpath import URL, JailedURL
 
@@ -185,7 +182,6 @@ def test_trailing_sep() -> None:
     assert URL("htp://example.com/with/double-sep//").trailing_sep == "//"
 
 
-@pytest.mark.skipif(webob is None, reason="webob not installed")
 def test_webob() -> None:
     base_url = "http://www.example.com"
     url = URL(webob.Request.blank("/webob/request", base_url=base_url))
@@ -195,7 +191,6 @@ def test_webob() -> None:
     assert str(url / webob.Request.blank("/replaced/path")) == "http://localhost/replaced/path"
 
 
-@pytest.mark.skipif(webob is None, reason="webob not installed")
 def test_webob_jail() -> None:
     request = webob.Request.blank("/path/to/filename.ext", {"SCRIPT_NAME": "/app/root"})
 
@@ -317,6 +312,38 @@ def test_embed() -> None:
 def test_pchar() -> None:
     url = URL("s3://mybucket") / "some_folder/123_2017-10-30T18:43:11.csv.gz"
     assert str(url) == "s3://mybucket/some_folder/123_2017-10-30T18:43:11.csv.gz"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    (
+        (urllib.parse.urlsplit("http://example.com/from-split?x=1#frag"), "http://example.com/from-split?x=1#frag"),
+        (urllib.parse.urlparse("https://example.com/from-parse"), "https://example.com/from-parse"),
+        (b"http://example.com/from-bytes", "http://example.com/from-bytes"),
+    ),
+)
+def test_constructor_canonicalizes_supported_types(raw: Any, expected: str) -> None:
+    class PathLike:
+        def __fspath__(self) -> str:
+            return "http://example.com/from-fspath"
+
+    assert str(URL(raw)) == expected
+
+    # PathLike objects should be accepted consistently regardless of other inputs
+    assert str(URL(PathLike())) == "http://example.com/from-fspath"
+
+
+def test_multi_argument_constructor_matches_joinpath_semantics() -> None:
+    base = URL("http://example.com/base/")
+
+    combined = URL("http://example.com/base/", "child", "../final")
+    chained = base / "child" / "../final"
+
+    assert str(combined) == str(chained)
+    assert "\x00" not in "".join(combined.parts)
+
+    absolute_override = URL("http://example.com/base/", "https://other.com/override", "tail")
+    assert str(absolute_override) == "https://other.com/override/tail"
 
 
 def test_percent_encoding_spaces() -> None:
