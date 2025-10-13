@@ -59,7 +59,7 @@ make test
 # Run unit tests only
 make test-unit
 
-# Run README tests only  
+# Run README tests only
 make test-doctest
 
 # Or use uv directly
@@ -86,7 +86,7 @@ make help
 - **Build System**: `uv` with `hatchling` backend for modern Python packaging
 
 ### CI Configuration
-GitHub Actions tests against Python 3.9-3.10 using `uv sync` and matrix strategy. Both unit tests and README doctests must pass.
+GitHub Actions tests against Python 3.9-3.13 using `uv sync` and matrix strategy. Both unit tests and README doctests must pass.
 
 ## Code Conventions
 

@@ -584,6 +584,7 @@ name = "urlpath"
 version = "1.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "charset-normalizer" },
     { name = "requests" },
 ]
 
@@ -605,6 +606,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "charset-normalizer", specifier = ">=2,<4" },
     { name = "jmespath", marker = "extra == 'json'" },
     { name = "requests" },
 ]

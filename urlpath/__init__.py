@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = ("URL",)
 
 import collections.abc
+import contextlib
 import functools
 import os
 import posixpath
@@ -417,6 +418,9 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
             # Python 3.12: Canonicalize for stricter PurePath validation
             # Note: This happens BEFORE _parse_args, so it's not redundant
             canonicalized_args = tuple(cls._canonicalize_arg(a) for a in args)
+            if len(canonicalized_args) > 1:
+                combined = cls._combine_args(canonicalized_args)
+                return super().__new__(cls, *combined)
             return super().__new__(cls, *canonicalized_args)
         else:
             # Python < 3.12: No early validation, canonicalization happens in _parse_args
@@ -435,8 +439,90 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         if sys.version_info >= (3, 12):
             # Python 3.12: Must canonicalize args again (__init__ gets original args)
             canonicalized_args = tuple(self._canonicalize_arg(a) for a in args)
-            super().__init__(*canonicalized_args)
+            if len(canonicalized_args) > 1:
+                combined = type(self)._combine_args(canonicalized_args)  # type: ignore[attr-defined]
+                super().__init__(*combined)
+            else:
+                super().__init__(*canonicalized_args)
         # else: Python < 3.12 doesn't call parent __init__ (it's object.__init__)
+
+    if sys.version_info >= (3, 12):
+
+        @classmethod
+        def _combine_args(cls, canonicalized_args: tuple[str, ...]) -> tuple[str, ...]:
+            """Combine raw constructor arguments to emulate legacy joining semantics."""
+            if not canonicalized_args:
+                return canonicalized_args
+
+            current = canonicalized_args[0]
+            for seg in canonicalized_args[1:]:
+                parsed_current = urllib.parse.urlsplit(current)
+                parsed_segment = urllib.parse.urlsplit(seg)
+
+                if parsed_segment.scheme:
+                    current = urllib.parse.urlunsplit(parsed_segment)
+                    continue
+
+                if seg.startswith("/"):
+                    current = urllib.parse.urlunsplit(
+                        (
+                            parsed_current.scheme,
+                            parsed_current.netloc,
+                            parsed_segment.path or seg,
+                            parsed_segment.query,
+                            parsed_segment.fragment,
+                        )
+                    )
+                    continue
+
+                base_path = parsed_current.path or ("/" if parsed_current.netloc else "")
+                joined_path = posixpath.join(base_path, seg)
+                if joined_path == ".":
+                    joined_path = ""
+                else:
+                    parts = joined_path.split("/")
+                    if "." in parts:
+                        joined_path = "/".join(part for part in parts if part != ".")
+                current = urllib.parse.urlunsplit(
+                    (
+                        parsed_current.scheme,
+                        parsed_current.netloc,
+                        joined_path,
+                        "",
+                        "",
+                    )
+                )
+
+            return (current,)
+
+        @classmethod
+        def _parse_path(cls, path: str) -> tuple[str, str, list[str]]:
+            r"""Parse a URL path into drive, root, and tail components.
+
+            Python 3.13 switched pathlib to the new PurePath implementation that
+            delegates parsing to ``os.path``. That behaviour breaks our URL
+            handling, so we hook into the new extension point and reuse the URL
+            flavour logic that previously powered ``_parse_parts``.
+
+            Args:
+                path: Raw path string produced from ``_raw_paths``.
+
+            Returns:
+                Tuple of ``(drive, root, tail_parts)`` where the tail preserves
+                escaped ``"/"`` characters via ``"\x00"`` markers exactly like
+                the historical implementation.
+            """
+            if not path:
+                return "", "", []
+
+            drv, root, tail = cls._flavour.splitroot(path)
+
+            if not tail:
+                tail_parts: list[str] = []
+            else:
+                tail_parts = [part for part in tail.split(cls._flavour.sep) if part]
+
+            return drv, root, tail_parts
 
     # Python 3.12 compatibility: _parts was replaced with _tail_cached
     if sys.version_info >= (3, 12):
@@ -495,11 +581,12 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
                 object.__delattr__(self, "_parts_cache")
 
             # When setting _parts, we need to update _tail_cached
-            if value and (self._drv or self._root):
-                # First element contains drive+root, rest is tail
-                object.__setattr__(self, "_tail_cached", tuple(value[1:]))
-            else:
-                object.__setattr__(self, "_tail_cached", tuple(value))
+            tail_parts = list(value[1:]) if value and (self._drv or self._root) else list(value)
+
+            object.__setattr__(self, "_tail_cached", tail_parts)
+            tail_attr = getattr(type(self), "_tail", None)
+            if not isinstance(tail_attr, property):
+                object.__setattr__(self, "_tail", tail_parts)
 
     @classmethod
     def _from_parts(cls, args: Any) -> URL:
@@ -602,22 +689,44 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         # Fall back to string conversion for other objects (including URL instances)
         return str(a)
 
-    def _ensure_parts_loaded(self) -> None:
-        """Ensure internal path parts are loaded (Python 3.12+ compatibility).
+    def _bootstrap_legacy_parts(self) -> None:
+        """Populate pathlib 3.11-style attributes when they are missing.
 
-        In Python 3.12, pathlib uses lazy loading. This method checks if
-        _tail_cached is loaded and calls _load_parts() if needed.
-
-        Note: We check _tail_cached instead of _parts to avoid recursion since
-        _parts is a property that calls this method.
+        Python 3.13 no longer materialises ``_drv``/``_root``/``_parts`` eagerly,
+        but the rest of this module still expects them to be present. We rebuild
+        those attributes from ``_raw_paths`` so existing logic keeps working.
         """
-        if sys.version_info >= (3, 12) and hasattr(self, "_load_parts"):
-            # In Python 3.12+, _drv/_root/_tail_cached are lazy-loaded
-            # Check if _tail_cached exists (not _parts to avoid recursion)
-            try:
-                _ = self._tail_cached  # type: ignore[attr-defined]
-            except AttributeError:
-                self._load_parts()  # type: ignore[attr-defined]
+        if hasattr(self, "_drv"):
+            return
+
+        raw_paths = getattr(self, "_raw_paths", None)
+        if not raw_paths:
+            return
+
+        raw_path = raw_paths[0]
+        drv, root, tail = self._flavour.splitroot(raw_path)
+
+        parts: list[str] = []
+        if drv or root:
+            parts.append(drv + root)
+
+        if tail:
+            parts.extend(tail.split(self._flavour.sep))
+
+        object.__setattr__(self, "_drv", drv)
+        object.__setattr__(self, "_root", root)
+        object.__setattr__(self, "_parts", parts)
+
+    def _ensure_parts_loaded(self) -> None:
+        """Ensure internal path parts are available across Python versions."""
+        if sys.version_info >= (3, 12):
+            if hasattr(self, "_load_parts"):
+                try:
+                    _ = self._tail_cached  # type: ignore[attr-defined]
+                except AttributeError:
+                    self._load_parts()  # type: ignore[attr-defined]
+            else:
+                self._bootstrap_legacy_parts()
 
     def _init(self) -> None:
         r"""Initialize URL-specific attributes after construction.
@@ -625,9 +734,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Loads parts (Python 3.12+) and cleans up escape sequences in the
         last path component (converting \x00 back to /).
         """
-        # Python 3.12+: Must call _load_parts() to initialize _drv, _root, _parts
-        if sys.version_info >= (3, 12) and hasattr(self, "_load_parts"):
-            self._load_parts()  # type: ignore[attr-defined]
+        self._ensure_parts_loaded()
 
         if self._parts:
             # trick to escape '/' in query and fragment and trailing
@@ -710,21 +817,36 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
                         )
                     )
 
-            # No absolute URLs/paths, do normal joining
-            # Strip query/fragment from self first
+            # No absolute URLs/paths, do manual joining to match legacy pathlib
+            base_path = self.path
+            if not base_path and self.netloc:
+                base_path = "/"
+
+            joined_path = base_path
+            for seg_str in canonicalized_segments:
+                if not seg_str:
+                    continue
+                joined_path = posixpath.join(joined_path, seg_str)
+
             clean_url_str = urllib.parse.urlunsplit(
                 (
                     self.scheme,
                     self.netloc,
-                    self.path,
-                    "",  # no query
-                    "",  # no fragment
+                    joined_path,
+                    "",  # drop query for child joins
+                    "",  # drop fragment for child joins
                 )
             )
-            # Create new URL by joining paths (use canonicalized segments)
-            return type(self)(clean_url_str, *canonicalized_segments)
+
+            return type(self)(clean_url_str)
         else:
             return super().joinpath(*pathsegments)
+
+    if sys.version_info >= (3, 12):
+
+        def __truediv__(self, key: Any) -> URL:  # type: ignore[override]
+            """Ensure the / operator reuses joinpath on Python 3.12+."""
+            return self.joinpath(key)
 
     @cached_property
     def __str__(self) -> str:
@@ -862,8 +984,6 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Returns:
             The decoded hostname, or None if not present.
         """
-        import contextlib
-
         result = super().hostname
         if result is not None:
             with contextlib.suppress(UnicodeEncodeError):
@@ -887,7 +1007,8 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         begin = 1 if self._drv or self._root else 0
 
         # Decode parts before encoding to avoid double-encoding
-        parts = [urllib.parse.unquote(i) for i in self._parts[begin:-1]] + [self.name]
+        decoded_name = urllib.parse.unquote(self.name)
+        parts = [urllib.parse.unquote(i) for i in self._parts[begin:-1]] + [decoded_name]
 
         return (
             self._root
@@ -1022,7 +1143,8 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Returns:
             A new URL instance with the modified suffix.
         """
-        return super().with_suffix(urllib.parse.quote(suffix, safe="."))
+        quoted_suffix = urllib.parse.quote(suffix, safe=".")
+        return super().with_suffix(quoted_suffix)
 
     def with_components(
         self,
@@ -1551,12 +1673,14 @@ class JailedURL(URL):
                             chroot.scheme,
                             chroot.netloc,
                             chroot.path,
-                            "",  # no query
-                            "",  # no fragment
+                            "",
+                            "",
                         )
                     )
-                    # Join the absolute path (with / stripped) to chroot
-                    return type(self)(chroot_url_str, seg_str.lstrip("/"), *canonicalized_segments[i + 1 :])
+                    joined = type(self)._combine_args(
+                        (chroot_url_str, seg_str.lstrip("/"), *canonicalized_segments[i + 1 :])  # type: ignore[attr-defined]
+                    )
+                    return type(self)(*joined)
 
             # No absolute paths, do normal joining
             clean_url_str = urllib.parse.urlunsplit(
@@ -1564,11 +1688,12 @@ class JailedURL(URL):
                     self.scheme,
                     self.netloc,
                     self.path,
-                    "",  # no query
-                    "",  # no fragment
+                    "",
+                    "",
                 )
             )
-            return type(self)(clean_url_str, *canonicalized_segments)
+            joined = type(self)._combine_args((clean_url_str, *canonicalized_segments))  # type: ignore[attr-defined]
+            return type(self)(*joined)
         else:
             # Python < 3.12: use _make_child which handles jailed logic
             result: JailedURL = super().joinpath(*pathsegments)  # type: ignore[assignment]
@@ -1584,18 +1709,17 @@ class JailedURL(URL):
 
         if self._parts[: len(chroot.parts)] != list(chroot.parts):  # type: ignore[has-type]
             self._drv, self._root, self._parts = chroot._drv, chroot._root, chroot._parts[:]
-            # Python 3.12: Also update _raw_paths to reflect the corrected path
             if sys.version_info >= (3, 12):
-                # Use the string representation of chroot as the new path
                 object.__setattr__(self, "_raw_paths", [str(chroot)])
-                # Clear _parts_cache since we updated _parts
                 if hasattr(self, "_parts_cache"):
                     object.__delattr__(self, "_parts_cache")
-                # Clear other cached properties that depend on the path
                 if hasattr(self, "_str"):
                     object.__delattr__(self, "_str")
-                if hasattr(self, "_tail_cached"):
-                    object.__setattr__(self, "_tail_cached", tuple(chroot._parts))
+                tail_parts = list(chroot._parts[1:]) if len(chroot._parts) > 1 else []
+                object.__setattr__(self, "_tail_cached", tail_parts)
+                tail_attr = getattr(type(self), "_tail", None)
+                if not isinstance(tail_attr, property):
+                    object.__setattr__(self, "_tail", tail_parts)
 
         super()._init()
 

@@ -10,7 +10,7 @@ URLPath provides URL manipulator class that extends [`pathlib.PurePath`](https:/
 
 ## Dependencies
 
-* Python 3.9, 3.10
+* Python 3.9–3.14
 * [Requests](http://docs.python-requests.org/)
 * [JMESPath](https://pypi.org/project/jmespath/) (Optional)
 * [WebOb](http://webob.org/) (Optional)
