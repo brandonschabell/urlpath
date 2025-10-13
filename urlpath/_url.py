@@ -9,7 +9,6 @@ import contextlib
 import os
 import posixpath
 import re
-import sys
 import urllib.parse
 from pathlib import PurePath
 from typing import Any
@@ -17,8 +16,9 @@ from unittest.mock import patch
 
 import requests
 
+from ._compat import IS_PY312_PLUS
 from ._flavour import _URLFlavour
-from ._utils import FrozenMultiDict, cached_property, netlocjoin
+from ._utils import FrozenMultiDict, cached_property, cleanup_escapes, netlocjoin
 
 try:
     import jmespath
@@ -73,7 +73,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Returns:
             New URL instance
         """
-        if sys.version_info >= (3, 12):
+        if IS_PY312_PLUS:
             # Python 3.12: Canonicalize for stricter PurePath validation
             # Note: This happens BEFORE _parse_args, so it's not redundant
             canonicalized_args = tuple(cls._canonicalize_arg(a) for a in args)
@@ -95,17 +95,17 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Args:
             *args: URL components (need to be canonicalized again for Python 3.12)
         """
-        if sys.version_info >= (3, 12):
+        if IS_PY312_PLUS:
             # Python 3.12: Must canonicalize args again (__init__ gets original args)
             canonicalized_args = tuple(self._canonicalize_arg(a) for a in args)
             if len(canonicalized_args) > 1:
-                combined = type(self)._combine_args(canonicalized_args)  # type: ignore[attr-defined]
+                combined = type(self)._combine_args(canonicalized_args)
                 super().__init__(*combined)
             else:
                 super().__init__(*canonicalized_args)
         # else: Python < 3.12 doesn't call parent __init__ (it's object.__init__)
 
-    if sys.version_info >= (3, 12):
+    if IS_PY312_PLUS:
 
         @classmethod
         def _combine_args(cls, canonicalized_args: tuple[str, ...]) -> tuple[str, ...]:
@@ -184,10 +184,10 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
             return drv, root, tail_parts
 
     # Python 3.12 compatibility: _parts was replaced with _tail_cached
-    if sys.version_info >= (3, 12):
+    if IS_PY312_PLUS:
 
         @property
-        def _parts(self) -> list[str]:  # type: ignore[misc]
+        def _parts(self) -> list[str]:
             """Compatibility property for Python 3.12+ with manual caching.
 
             In Python 3.12, pathlib uses _tail_cached instead of _parts. This property
@@ -202,7 +202,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
             """
             # Check if we have a cached value
             if hasattr(self, "_parts_cache"):
-                return self._parts_cache  # type: ignore[return-value]
+                return self._parts_cache
 
             self._ensure_parts_loaded()
             # In Python 3.12, the structure is: _raw_paths contains input,
@@ -219,14 +219,14 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
 
             # Clean up \x00 escape in last part (used to escape / in query/fragment/trailing)
             if parts:
-                parts[-1] = parts[-1].replace("\\x00", "/")
+                parts[-1] = cleanup_escapes(parts[-1])
 
             # Cache the result for future access
             object.__setattr__(self, "_parts_cache", parts)
             return parts
 
         @_parts.setter
-        def _parts(self, value: list[str]) -> None:  # type: ignore[misc]
+        def _parts(self, value: list[str]) -> None:
             """Compatibility setter for Python 3.12+.
 
             Converts _parts list back to _tail_cached tuple. Clears the cache
@@ -259,11 +259,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         Returns:
             New URL instance
         """
-        if sys.version_info >= (3, 12):
-            # Python 3.12 removed _from_parts, use direct construction
-            ret = cls(*args)
-        else:
-            ret = super()._from_parts(args)
+        ret = cls(*args) if IS_PY312_PLUS else super()._from_parts(args)
         ret._init()
         return ret
 
@@ -284,7 +280,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         """
         # Python 3.12 changed _from_parsed_parts from classmethod to instance method
         # Signature changed from (drv, root, parts) to (self, drv, root, tail)
-        if sys.version_info >= (3, 12):
+        if IS_PY312_PLUS:
             # In Python 3.12, we need to create an instance first and set _raw_paths
             self = object.__new__(cls)
             # Reconstruct the path string for _raw_paths
@@ -378,12 +374,12 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
 
     def _ensure_parts_loaded(self) -> None:
         """Ensure internal path parts are available across Python versions."""
-        if sys.version_info >= (3, 12):
+        if IS_PY312_PLUS:
             if hasattr(self, "_load_parts"):
                 try:
-                    _ = self._tail_cached  # type: ignore[attr-defined]
+                    _ = self._tail_cached
                 except AttributeError:
-                    self._load_parts()  # type: ignore[attr-defined]
+                    self._load_parts()
             else:
                 self._bootstrap_legacy_parts()
 
@@ -397,7 +393,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
 
         if self._parts:
             # trick to escape '/' in query and fragment and trailing
-            self._parts[-1] = self._parts[-1].replace("\\x00", "/")
+            self._parts[-1] = cleanup_escapes(self._parts[-1])
 
     def _make_child(self, args: Any) -> URL:
         # replace by parts that have no query and have no fragment
@@ -450,7 +446,7 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
             >>> str(url / '/absolute')
             'http://example.com/absolute'
         """
-        if sys.version_info >= (3, 12):
+        if IS_PY312_PLUS:
             # Python 3.12: Manually implement join logic
             # First, canonicalize all segments (handles webob.Request, etc.)
             canonicalized_segments = tuple(self._canonicalize_arg(seg) for seg in pathsegments)
@@ -501,9 +497,9 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         else:
             return super().joinpath(*pathsegments)
 
-    if sys.version_info >= (3, 12):
+    if IS_PY312_PLUS:
 
-        def __truediv__(self, key: Any) -> URL:  # type: ignore[override]
+        def __truediv__(self, key: Any) -> URL:
             """Ensure the / operator reuses joinpath on Python 3.12+."""
             return self.joinpath(key)
 
@@ -690,8 +686,8 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         """
         full_name = super().name
         # In Python 3.12, super().name may have \x00 escape, clean it up
-        if sys.version_info >= (3, 12):
-            full_name = full_name.replace("\\x00", "/")
+        if IS_PY312_PLUS:
+            full_name = cleanup_escapes(full_name)
 
         # Fragment takes priority - everything after # is fragment
         fragment_idx = full_name.find("#")
@@ -1236,7 +1232,7 @@ class JailedURL(URL):
         # The root argument is already handled in __new__
         # In Python < 3.12, PurePath.__init__ does nothing, so we can't pass args
         # In Python 3.12, we need to canonicalize and pass args (without root kwarg)
-        if sys.version_info >= (3, 12):
+        if IS_PY312_PLUS:
             # Must canonicalize args (__init__ receives original args)
             canonicalized_args = tuple(self._canonicalize_arg(a) for a in args)
             super().__init__(*canonicalized_args)
@@ -1250,7 +1246,7 @@ class JailedURL(URL):
         a dynamic subclass and calls _from_parts again, causing infinite recursion.
         Instead, we use object.__new__ directly.
         """
-        if sys.version_info >= (3, 12):
+        if IS_PY312_PLUS:
             # Create instance using object.__new__ to bypass __new__
             self = object.__new__(cls)
             # Set _raw_paths which is required for _load_parts
@@ -1309,7 +1305,7 @@ class JailedURL(URL):
             >>> str(jail / '../../escape')  # Prevented by _init
             'http://example.com/app/'
         """
-        if sys.version_info >= (3, 12):
+        if IS_PY312_PLUS:
             chroot = self._chroot
             assert chroot is not None  # Always set by __new__
 
@@ -1337,7 +1333,7 @@ class JailedURL(URL):
                         )
                     )
                     joined = type(self)._combine_args(
-                        (chroot_url_str, seg_str.lstrip("/"), *canonicalized_segments[i + 1 :])  # type: ignore[attr-defined]
+                        (chroot_url_str, seg_str.lstrip("/"), *canonicalized_segments[i + 1 :])
                     )
                     return type(self)(*joined)
 
@@ -1351,24 +1347,24 @@ class JailedURL(URL):
                     "",
                 )
             )
-            joined = type(self)._combine_args((clean_url_str, *canonicalized_segments))  # type: ignore[attr-defined]
+            joined = type(self)._combine_args((clean_url_str, *canonicalized_segments))
             return type(self)(*joined)
         else:
             # Python < 3.12: use _make_child which handles jailed logic
-            result: JailedURL = super().joinpath(*pathsegments)  # type: ignore[assignment]
-            return result
+            result = super().joinpath(*pathsegments)
+            return result  # type: ignore[return-value]
 
     def _init(self) -> None:
         # Python 3.12+: Must call _load_parts() to initialize _drv, _root, _parts
-        if sys.version_info >= (3, 12) and hasattr(self, "_load_parts"):
-            self._load_parts()  # type: ignore[attr-defined]
+        if IS_PY312_PLUS and hasattr(self, "_load_parts"):
+            self._load_parts()
 
         chroot = self._chroot
         assert chroot is not None  # Always set by __new__
 
-        if self._parts[: len(chroot.parts)] != list(chroot.parts):  # type: ignore[has-type]
+        if self._parts[: len(chroot.parts)] != list(chroot.parts):
             self._drv, self._root, self._parts = chroot._drv, chroot._root, chroot._parts[:]
-            if sys.version_info >= (3, 12):
+            if IS_PY312_PLUS:
                 object.__setattr__(self, "_raw_paths", [str(chroot)])
                 if hasattr(self, "_parts_cache"):
                     object.__delattr__(self, "_parts_cache")
@@ -1398,7 +1394,7 @@ class JailedURL(URL):
         chroot = self._chroot
         assert chroot is not None  # Always set by __new__
 
-        if sys.version_info >= (3, 12):
+        if IS_PY312_PLUS:
             # Python 3.12: _parts is a property computed from _drv, _root, _tail_cached
             # The resolve logic for jailed URLs needs _parts to look like:
             # ["http://example.com/app/", "path", "to", "content", "..", "file"]

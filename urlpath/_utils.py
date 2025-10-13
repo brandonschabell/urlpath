@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-__all__ = ("FrozenDict", "FrozenMultiDict", "MultiDictMixin", "cached_property", "netlocjoin", "_url_splitroot")
+__all__ = (
+    "FrozenDict",
+    "FrozenMultiDict",
+    "MultiDictMixin",
+    "cached_property",
+    "netlocjoin",
+    "_url_splitroot",
+    "cleanup_escapes",
+)
 
 import functools
 import re
@@ -79,7 +87,7 @@ class MultiDictMixin:
         key: Any,
         default: Any = None,
         predicate: Callable[[Any], bool] | None = None,
-        type: Callable[[Any], Any] | None = None,
+        type_: Callable[[Any], Any] | None = None,
     ) -> Any:
         """Get the first value for a key that matches the predicate.
 
@@ -87,10 +95,10 @@ class MultiDictMixin:
             key: The dictionary key to look up
             default: Value to return if key not found or no value matches predicate
             predicate: Optional callable to filter values (e.g., from inspect.getmembers)
-            type: Optional callable to transform the returned value
+            type_: Optional callable to transform the returned value
 
         Returns:
-            The first matching value, optionally transformed by type callable,
+            The first matching value, optionally transformed by type_ callable,
             or default if no match found.
         """
         try:
@@ -100,7 +108,7 @@ class MultiDictMixin:
         else:
             for value in values:
                 if not predicate or predicate(value):
-                    return value if not type else type(value)
+                    return value if not type_ else type_(value)
 
         return default
 
@@ -214,7 +222,22 @@ def _url_splitroot(part: str, sep: str = "/") -> tuple[str, str, str]:
 
     drive = urllib.parse.urlunsplit((scheme, netloc, "", "", ""))
     match = re.match(f"^({re.escape(sep)}*)(.*)$", path)
-    assert match is not None
+    assert match is not None  # we're sure it's always valid for this regex
     root, path = match.groups()
-
     return drive, root, path
+
+
+def cleanup_escapes(text: str) -> str:
+    r"""Clean up escape sequences used for URL component separation.
+
+    Replaces the internal escape character (\x00) used to protect
+    forward slashes in query and fragment components back to regular
+    forward slashes.
+
+    Args:
+        text: String potentially containing \x00 escape sequences
+
+    Returns:
+        String with \x00 replaced by /
+    """
+    return text.replace("\\x00", "/")

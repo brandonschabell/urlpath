@@ -5,19 +5,20 @@ from __future__ import annotations
 __all__ = ("_URLFlavour",)
 
 import posixpath
-import sys
+from typing import TYPE_CHECKING
 
+from ._compat import IS_PY312_PLUS
 from ._utils import _url_splitroot
 
 # Python 3.12+ removed _PosixFlavour class, replaced with module-based approach
-if sys.version_info >= (3, 12):
-    _PosixFlavour = None  # noqa: F811
-else:
+if not TYPE_CHECKING and not IS_PY312_PLUS:
     from pathlib import _PosixFlavour
+else:
+    _PosixFlavour = object
 
 
 # Python 3.12+ compatibility: create flavour class or simple object
-if sys.version_info >= (3, 12):
+if IS_PY312_PLUS:
     # Python 3.12+: _flavour is a module, we create a simple object with required attributes
     class _URLFlavour:
         r"""Custom pathlib flavour for parsing URLs as filesystem paths (Python 3.12+).
@@ -114,7 +115,7 @@ if sys.version_info >= (3, 12):
 
 else:
     # Python 3.9-3.11: Inherit from _PosixFlavour class
-    class _URLFlavour(_PosixFlavour):
+    class _URLFlavour(_PosixFlavour):  # type: ignore[no-redef]
         r"""Custom pathlib flavour for parsing URLs as filesystem paths.
 
         Extends PosixFlavour to treat URLs as paths by:
