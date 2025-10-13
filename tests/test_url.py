@@ -2,7 +2,9 @@
 import urllib.parse
 from pathlib import PurePosixPath
 from typing import Any, cast
+from unittest.mock import Mock
 
+import jmespath
 import pytest
 import webob
 
@@ -383,3 +385,39 @@ def test_colon_in_filename() -> None:
     assert url.query == "key=value"
     assert url.fragment == "frag"
     assert str(url) == "http://www.example.com/abc:def.html?key=value#frag"
+
+
+def test_get_json_with_jmespath_filtering() -> None:
+    """Test get_json method with JMESPath query filtering."""
+    from unittest.mock import patch
+
+    url = URL("http://api.example.com/data")
+
+    # Mock response with JSON data
+    mock_response = Mock()
+    mock_response.json.return_value = {
+        "users": [
+            {"name": "Alice", "age": 30},
+            {"name": "Bob", "age": 25},
+        ],
+        "total": 2,
+    }
+
+    # Patch requests.get to avoid actual network calls
+    with patch("requests.get", return_value=mock_response):
+        # Test without JMESPath filtering
+        result = url.get_json()
+        assert result == mock_response.json.return_value
+
+        # Test with JMESPath string query
+        result = url.get_json(keys="users[0].name")
+        assert result == "Alice"
+
+        # Test with compiled JMESPath expression
+        compiled_expr = jmespath.compile("users[*].age")
+        result = url.get_json(keys=compiled_expr)
+        assert result == [30, 25]
+
+        # Test with query parameters
+        result = url.get_json(query={"filter": "active"}, keys="total")
+        assert result == 2

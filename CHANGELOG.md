@@ -23,7 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated GitHub Actions workflows to use modern actions and UV package manager
 - Modernized code formatting (improved consistency and readability)
 - Centralized all package metadata in `pyproject.toml` (removed from module docstring)
-=- **Updated all docstrings from reStructuredText to Google/NumPy style** (Args/Returns/Raises format)
+- **Updated all docstrings from reStructuredText to Google/NumPy style** (Args/Returns/Raises format)
+- **Refactored monolithic module into modular structure**: Split `urlpath/__init__.py` (1540 lines) into `_compat.py`, `_utils.py`, `_flavour.py`, and `_url.py` for better maintainability
+- **Centralized Python version checking**: Replaced 18 scattered `sys.version_info >= (3, 12)` checks with single `IS_PY312_PLUS` constant in `_compat.py`
+- **Added `cleanup_escapes()` helper function**: Eliminated 6 duplicate `.replace("\\x00", "/")` patterns for cleaner code
+- **Made WebOb a required test dependency**: Removed conditional imports and test skips to ensure WebOb integration is always tested
 
 ### Added
 - `.python-version` file for Python version management
@@ -48,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pydocstyle linting** (Ruff "D" rules) to enforce documentation consistency
 - **Type annotations for all test functions** (`-> None` return types)
 - **Docstrings for magic methods** (`__str__`, `__bytes__`, etc.)
+- **Test coverage for constructor canonicalization**: Tests for `SplitResult`, `ParseResult`, `bytes`, and `__fspath__` inputs
+- **Test coverage for multi-argument URL construction**: Validates that `URL("base", "child", "../final")` matches chained joinpath semantics
 
 ### Removed
 - `setup.py` (replaced by `pyproject.toml`)
