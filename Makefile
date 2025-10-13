@@ -1,4 +1,4 @@
-.PHONY: help install install-hooks test test-unit test-doctest build clean format lint check mypy
+.PHONY: help install install-hooks test test-unit test-doctest build clean fix check mypy
 .DEFAULT_GOAL := help
 
 # Use copy mode to avoid filesystem reflink issues
@@ -32,19 +32,15 @@ clean: ## Clean build artifacts
 	find . -type f -name "*.pyc" -delete
 	find . -type d -name "__pycache__" -delete
 
-format: ## Format code with ruff
-	uv run --group dev ruff format
-
-format-check: ## Check if code is formatted
-	uv run --group dev ruff format --check
-
-lint: ## Lint code with ruff
-	uv run --group dev ruff check
-
-lint-fix: ## Lint and fix code with ruff
+fix: ## Fix formatting and linting issues automatically
 	uv run --group dev ruff check --fix
+	uv run --group dev ruff format
 
 mypy: ## Run mypy type checking
 	uv run --group dev mypy urlpath/ tests/
 
-check: format-check lint mypy test ## Run format check, linting, type checking, and tests
+check: ## Verify code quality (format, lint, type check, test)
+	uv run --group dev ruff format --check
+	uv run --group dev ruff check
+	uv run --group dev mypy urlpath/ tests/
+	uv run --group dev pytest tests/ README.md --markdown-docs
