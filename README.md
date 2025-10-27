@@ -1,6 +1,6 @@
 # URLPath
 
-URLPath provides URL manipulator class that extends [`pathlib.PurePath`](https://docs.python.org/3/library/pathlib.html#pure-paths).
+URLPath turns raw URLs into first-class objects that behave like `pathlib` paths and `requests` sessions at the same time. Build, query, and call URLs with an expressive, chainable API.
 
 [![Tests](https://github.com/brandonschabell/urlpath/actions/workflows/test.yml/badge.svg)](https://github.com/brandonschabell/urlpath/actions/workflows/test.yml)
 [![PyPI version](https://img.shields.io/pypi/v/urlpath.svg)](https://pypi.python.org/pypi/urlpath)
@@ -8,153 +8,186 @@ URLPath provides URL manipulator class that extends [`pathlib.PurePath`](https:/
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Versions](https://img.shields.io/pypi/pyversions/urlpath.svg)](https://pypi.org/project/urlpath/)
 
-## Dependencies
+## Features
 
-* Python 3.9–3.14
-* [Requests](http://docs.python-requests.org/)
-* [JMESPath](https://pypi.org/project/jmespath/) (Optional)
-* [WebOb](http://webob.org/) (Optional)
+- Compose URLs with `pathlib` semantics: join segments, inspect components, and normalise paths.
+- Access and mutate parts of the URL (`scheme`, `netloc`, `userinfo`, `query`, `fragment`, etc.) with fluent helpers.
+- Treat query strings as multidicts, rebuild them from dicts/objects, or append additional parameters without losing order.
+- Make HTTP requests directly from any `URL` (`get`, `post`, `patch`, `put`, `delete`) and fetch JSON with optional JMESPath filtering.
+- Keep callers inside a known root using `JailedURL` guards.
+- Accept familiar inputs: strings, bytes, `urllib.parse` results, `webob.Request`, and other `PathLike` objects.
 
-## Install
+## How to install
 
 ```bash
 pip install urlpath
 ```
+### Dependencies
 
-## Examples
+* **Python 3.9–3.14**
+* **[Requests](http://docs.python-requests.org/)** - required for HTTP verbs.
+* **[JMESPath](https://pypi.org/project/jmespath/)** - optional, enables filtered `get_json` responses.
+* **[WebOb](http://webob.org/)** - optional, allows constructing URLs directly from `webob.Request` instances.
 
-```python
-from urlpath import URL
-
-# Create URL object
-url = URL(
-    'https://username:password@secure.example.com:1234/path/to/file.ext?field1=1&field2=2&field1=3#fragment')
-
-# Representation
-assert str(url) == 'https://username:password@secure.example.com:1234/path/to/file.ext?field1=1&field2=2&field1=3#fragment'
-assert url.as_uri() == 'https://username:password@secure.example.com:1234/path/to/file.ext?field1=1&field2=2&field1=3#fragment'
-assert url.as_posix() == 'https://username:password@secure.example.com:1234/path/to/file.ext?field1=1&field2=2&field1=3#fragment'
-
-# Access pathlib.PurePath compatible properties
-assert url.drive == 'https://username:password@secure.example.com:1234'
-assert url.root == '/'
-assert url.anchor == 'https://username:password@secure.example.com:1234/'
-assert url.path == '/path/to/file.ext'
-assert url.name == 'file.ext'
-assert url.suffix == '.ext'
-assert url.suffixes == ['.ext']
-assert url.stem == 'file'
-assert url.parts == ('https://username:password@secure.example.com:1234/', 'path', 'to', 'file.ext')
-assert str(url.parent) == 'https://username:password@secure.example.com:1234/path/to'
-
-# Access scheme
-assert url.scheme == 'https'
-
-# Access netloc
-assert url.netloc == 'username:password@secure.example.com:1234'
-assert url.username == 'username'
-assert url.password == 'password'
-assert url.hostname == 'secure.example.com'
-assert url.port == 1234
-
-# Access query
-assert url.query == 'field1=1&field2=2&field1=3'
-assert url.form_fields == (('field1', '1'), ('field2', '2'), ('field1', '3'))
-assert 'field1' in url.form
-assert url.form.get_one('field1') == '1'
-assert url.form.get_one('field3') is None
-
-# Access fragment
-assert url.fragment == 'fragment'
-
-# Path operations
-assert str(url / 'suffix') == 'https://username:password@secure.example.com:1234/path/to/file.ext/suffix'
-assert str(url / '../../rel') == 'https://username:password@secure.example.com:1234/path/to/file.ext/../../rel'
-assert str((url / '../../rel').resolve()) == 'https://username:password@secure.example.com:1234/path/rel'
-assert str(url / '/') == 'https://username:password@secure.example.com:1234/'
-assert str(url / 'http://example.com/') == 'http://example.com/'
-
-# Replace components
-assert str(url.with_scheme('http')) == 'http://username:password@secure.example.com:1234/path/to/file.ext?field1=1&field2=2&field1=3#fragment'
-assert str(url.with_netloc('www.example.com')) == 'https://www.example.com/path/to/file.ext?field1=1&field2=2&field1=3#fragment'
-assert str(url.with_userinfo('joe', 'pa33')) == 'https://joe:pa33@secure.example.com:1234/path/to/file.ext?field1=1&field2=2&field1=3#fragment'
-assert str(url.with_hostinfo('example.com', 8080)) == 'https://username:password@example.com:8080/path/to/file.ext?field1=1&field2=2&field1=3#fragment'
-assert str(url.with_fragment('new fragment')) == 'https://username:password@secure.example.com:1234/path/to/file.ext?field1=1&field2=2&field1=3#new fragment'
-assert str(url.with_components(username=None, password=None, query='query', fragment='frag')) == 'https://secure.example.com:1234/path/to/file.ext?query#frag'
-
-# Replace query
-assert str(url.with_query({'field3': '3', 'field4': [1, 2, 3]})) == 'https://username:password@secure.example.com:1234/path/to/file.ext?field3=3&field4=1&field4=2&field4=3#fragment'
-assert str(url.with_query(field3='3', field4=[1, 2, 3])) == 'https://username:password@secure.example.com:1234/path/to/file.ext?field3=3&field4=1&field4=2&field4=3#fragment'
-assert str(url.with_query('query')) == 'https://username:password@secure.example.com:1234/path/to/file.ext?query#fragment'
-assert str(url.with_query(None)) == 'https://username:password@secure.example.com:1234/path/to/file.ext#fragment'
-
-# Amend query
-assert str(url.with_query(field1='1').add_query(field2=2)) == 'https://username:password@secure.example.com:1234/path/to/file.ext?field1=1&field2=2#fragment'
-```
-
-### HTTP requests
-
-URLPath provides convenient methods for making HTTP requests:
+## Quick start
 
 ```python
 from urlpath import URL
 
-# GET request
-url = URL('https://httpbin.org/get')
-response = url.get()
-assert response.status_code == 200
+api = URL("https://api.example.com/v1")
+user = api / "users" / "123"
 
-# POST request
-url = URL('https://httpbin.org/post')
-response = url.post(data={'key': 'value'})
-assert response.status_code == 200
+# Manipulate components just like pathlib
+assert user.path == "/v1/users/123"
+assert user.parent == URL("https://api.example.com/v1/users")
 
-# DELETE request
-url = URL('https://httpbin.org/delete')
-response = url.delete()
-assert response.status_code == 200
+# Tweak and inspect the query string
+endpoint = user.with_query(include=["profile", "activity"]).add_query(page=2)
+assert str(endpoint) == "https://api.example.com/v1/users/123?include=profile&include=activity&page=2"
 
-# PATCH request
-url = URL('https://httpbin.org/patch')
-response = url.patch(data={'key': 'value'})
-assert response.status_code == 200
-
-# PUT request
-url = URL('https://httpbin.org/put')
-response = url.put(data={'key': 'value'})
-assert response.status_code == 200
+# Call the URL with requests
+response = endpoint.get()
+if response.ok:
+    data = endpoint.get_json(keys="user.profile")  # Optional JMESPath filter
 ```
 
-### Jail
+## Path-aware URL composition
+
+`URL` subclasses `pathlib.PurePath` to give you intuitive operations:
 
 ```python
-from urlpath import URL
+url = URL("https://username:password@secure.example.com:1234/path/to/file.ext?field1=1#fragment")
 
-root = 'http://www.example.com/app/'
-current = 'http://www.example.com/app/path/to/content'
-url = URL(root).jailed / current
-assert str(url / '/root') == 'http://www.example.com/app/root'
-assert str((url / '../../../../../../root').resolve()) == 'http://www.example.com/app/root'
-assert str(url / 'http://localhost/') == 'http://www.example.com/app/'
-assert str(url / 'http://www.example.com/app/file') == 'http://www.example.com/app/file'
+url.drive      # 'https://username:password@secure.example.com:1234'
+url.anchor     # 'https://username:password@secure.example.com:1234/'
+url.parts      # ('https://username:password@secure.example.com:1234/', 'path', 'to', 'file.ext')
+url.name       # 'file.ext'
+url.suffixes   # ['.ext']
+url.parent     # URL('https://username:password@secure.example.com:1234/path/to')
+
+# Slash-join works the way pathlib users expect
+assert str(url / "reports" / "2024.json") == "https://username:password@secure.example.com:1234/path/to/file.ext/reports/2024.json"
+assert str((url / "../templates").resolve()) == "https://username:password@secure.example.com:1234/path/to/templates"
+
+# Absolute joins or constructor segments reset the path
+assert str(url / "/reset/path") == "https://username:password@secure.example.com:1234/reset/path"
+assert str(URL("https://example.com/base", "/fresh")) == "https://example.com/fresh"
 ```
 
-### Trailing separator will be retained
+Use the fluent `with_*` helpers to surgically update components:
 
 ```python
-from urlpath import URL
-
-url = URL('http://www.example.com/path/with/trailing/sep/')
-assert str(url).endswith('/')
-assert url.trailing_sep == '/'
-assert url.name == 'sep'
-assert url.path == '/path/with/trailing/sep/'
-assert url.parts[-1] == 'sep'
-
-url = URL('http://www.example.com/path/without/trailing/sep')
-assert not str(url).endswith('/')
-assert url.trailing_sep == ''
-assert url.name == 'sep'
-assert url.path == '/path/without/trailing/sep'
-assert url.parts[-1] == 'sep'
+url = URL("http://www.example.com/path/to/file.exe?query#frag")
+url = url.with_scheme("https").with_userinfo("user", "secret")
+assert str(url) == "https://user:secret@www.example.com/path/to/file.exe?query#frag"
+assert url.hostname == "www.example.com"
 ```
+
+## Query and fragment helpers
+
+URLPath keeps queries ordered and exposes them through a WebOb-style multidict:
+
+```python
+url = URL("http://www.example.com/form")
+form_url = url.with_query({"field1": ["value1", "value2"], "field2": "hello, world"})
+
+form_url.form.get("field1")      # ("value1", "value2")
+"field2" in form_url.form        # True
+
+# Append without losing the existing parameters
+extended = form_url.add_query(field3="value3")
+assert extended.query == "field1=value1&field1=value2&field2=hello%2C+world&field3=value3"
+
+# Swap out the fragment without touching the rest of the URL
+assert str(url.with_fragment("section-3")) == "http://www.example.com/form#section-3"
+```
+
+## HTTP requests & JSON extraction
+
+Every `URL` instance can issue HTTP requests via `requests`:
+
+```python
+url = URL("https://httpbin.org/anything")
+response = url.post(json={"hello": "world"})
+response.raise_for_status()
+
+# Fetch JSON and optionally apply a JMESPath expression
+reporting_api = URL("https://api.example.com/reports")
+document = reporting_api.get_json(query={"status": "active"}, keys="items[*].name")
+# => ["Quarterly", "Annual"]
+```
+
+Pass a compiled JMESPath expression instead of a string when you need to reuse filters:
+
+```python
+import jmespath
+
+expr = jmespath.compile("users[*].age")
+ages = URL("https://api.example.com/users").get_json(keys=expr)
+```
+
+`jmespath` is optional; install it to enable filtered lookups (`pip install urlpath[jmespath]`).
+
+## Constrain navigation with jailed URLs
+
+`JailedURL` confines joins and resolutions to a particular origin, preventing escapes:
+
+```python
+root = URL("https://www.example.com/app/")
+current = root.jailed / "path/to/content"
+
+assert str(current / "appendix") == "https://www.example.com/app/path/to/content/appendix"
+assert str((current / "/root").resolve()) == "https://www.example.com/app/root"
+assert str(current / "https://malicious.test") == "https://www.example.com/app/"
+```
+
+You can also wrap an incoming `webob.Request` to mirror the application's mount point:
+
+```python
+import webob
+from urlpath import JailedURL
+
+request = webob.Request.blank(
+    "/docs/page",
+    base_url="https://docs.example.com",
+    environ={"SCRIPT_NAME": "/knowledge-base"},
+)
+
+jailed = JailedURL(request)
+assert str(jailed) == "https://docs.example.com/knowledge-base/docs/page"
+assert str(jailed.chroot) == "https://docs.example.com/knowledge-base"
+```
+
+## Works with familiar URL sources
+
+The constructor accepts many canonical URL representations:
+
+```python
+from pathlib import PurePosixPath
+from urllib.parse import urlsplit
+
+URL(urlsplit("https://example.com/from-split"))
+URL(PurePosixPath("path/segment"))            # usable when joining onto a local path
+URL(b"https://example.com/from-bytes")
+URL(webob.Request.blank("/resource", base_url="https://example.com"))
+```
+
+## Encoding-aware by default
+
+IDNs and percent-encoding are handled for you:
+
+```python
+url = URL("http://www.xn--alliancefranaise-npb.nu/")
+url.hostname # "www.alliancefran\u00e7aise.nu"
+
+URL("http://example.com/name").with_name("\u65e5\u672c\u8a9e/\u540d\u524d")
+# str(encoded) == "http://example.com/%E6%97%A5%E6%9C%AC%E8%AA%9E%2F%E5%90%8D%E5%89%8D"
+```
+
+## Testing the examples
+
+You can find additional examples in the doctest script located at [docttests.md](tests/doctests.md).
+
+See the [test suite](tests/test_url.py) for more usage patterns and edge cases.
+
+Run `make test` to execute tests and ensure the published examples stay up to date.

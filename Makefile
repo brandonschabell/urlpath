@@ -4,6 +4,8 @@
 # Use copy mode to avoid filesystem reflink issues
 export UV_LINK_MODE = copy
 
+DOC_TESTS = tests/doctests.md
+
 help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
@@ -21,8 +23,8 @@ test: test-unit test-doctest ## Run all tests
 test-unit: ## Run unit tests
 	uv run --group dev pytest tests/
 
-test-doctest: ## Run doctests from README
-	uv run --group dev pytest README.md --markdown-docs
+test-doctest: ## Run doctests from doctests.md
+	uv run --group dev pytest $(DOC_TESTS) --markdown-docs
 
 build: ## Build package
 	uv build
@@ -43,4 +45,4 @@ check: ## Verify code quality (format, lint, type check, test)
 	uv run --group dev ruff format --check
 	uv run --group dev ruff check
 	uv run --group dev mypy urlpath/ tests/
-	uv run --group dev pytest tests/ README.md --markdown-docs
+	uv run --group dev pytest tests/ $(DOC_TESTS) --markdown-docs

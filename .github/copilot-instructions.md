@@ -38,7 +38,7 @@ All URL components follow this pattern: property decorator + cached_property for
 - Comprehensive property testing for all URL components
 - HTTP method testing (when possible)
 - Optional dependency tests use `@pytest.mark.skipif` decorators
-- README examples are automatically tested using pytest-markdown-docs
+- doctest examples are automatically tested using pytest-markdown-docs
 
 ### Development Workflow
 
@@ -59,12 +59,12 @@ make test
 # Run unit tests only
 make test-unit
 
-# Run README tests only
+# Run doc-tests only
 make test-doctest
 
 # Or use uv directly
 uv run pytest tests/
-uv run pytest README.md --markdown-docs
+uv run pytest tests/doctests.md --markdown-docs
 ```
 
 ### Building and Packaging
@@ -86,7 +86,7 @@ make help
 - **Build System**: `uv` with `hatchling` backend for modern Python packaging
 
 ### CI Configuration
-GitHub Actions tests against Python 3.9-3.13 using `uv sync` and matrix strategy. Both unit tests and README doctests must pass.
+GitHub Actions tests against Python 3.9-3.13 using `uv sync` and matrix strategy. Both unit tests and doctests must pass.
 
 ## Code Conventions
 
@@ -108,5 +108,6 @@ GitHub Actions tests against Python 3.9-3.13 using `uv sync` and matrix strategy
 ### File Structure
 - `urlpath/__init__.py`: Single-file module with all classes
 - `tests/test_url.py`: Comprehensive pytest test suite
-- `README.md`: Extensive examples with automated pytest validation
+- `README.md`: Overview of the library, feature tour, and usage examples
+- `tests/doctests.md`: Extensive examples with automated pytest validation
 - `conftest.py`: pytest configuration for test discovery and path setup
