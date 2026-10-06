@@ -8,7 +8,7 @@ Examples:
     >>> url = URL('https://example.com/path/to/file.txt')
     >>> url.hostname
     'example.com'
-    >>> str(url / 'other.txt')
+    >>> str(url.parent / 'other.txt')
     'https://example.com/path/to/other.txt'
 """
 

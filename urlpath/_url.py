@@ -51,8 +51,8 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         'https'
         >>> url.hostname
         'example.com'
-        >>> str(url / 'other.txt')
-        'https://user:pass@example.com:8080/path/to/other.txt?key=value#section'
+        >>> str(url.parent / 'other.txt')
+        'https://user:pass@example.com:8080/path/to/other.txt'
         >>> str(url.with_query(foo='bar'))
         'https://user:pass@example.com:8080/path/to/file.txt?foo=bar#section'
     """
@@ -253,6 +253,14 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
             if not isinstance(tail_attr, property):
                 object.__setattr__(self, "_tail", tail_parts)
 
+        def with_segments(self, *pathsegments: Any) -> URL:
+            """Construct a new URL from path segments.
+
+            Python 3.12's relative_to() rebuilds its result from the escaped
+            internal tail, so restore escaped '/' characters before reparsing.
+            """
+            return type(self)(*(cleanup_escapes(s) if isinstance(s, str) else s for s in pathsegments))
+
     @classmethod
     def _from_parts(cls, args: Any) -> URL:
         """Create URL from parts, handling Python 3.12 changes.
@@ -290,7 +298,8 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
             # In Python 3.12, we need to create an instance first and set _raw_paths
             self = object.__new__(cls)
             # Reconstruct the path string for _raw_paths
-            path_str = drv + root + "/".join(parts) if parts else drv + root
+            # (parts may come from the escaped internal tail, e.g. via relative_to)
+            path_str = cleanup_escapes(drv + root + "/".join(parts) if parts else drv + root)
             object.__setattr__(self, "_raw_paths", [path_str])
             # Now call the instance method which will set _drv, _root, _tail_cached
             super(URL, self)._from_parsed_parts(drv, root, tuple(parts))
@@ -517,6 +526,10 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
         """Return string representation of the URL."""
         # NOTE: PurePath.__str__ returns '.' if path is empty.
         return urllib.parse.urlunsplit(self.components)
+
+    def __fspath__(self) -> str:
+        """Return the URL string (Python 3.15 aliases PurePath.__fspath__ to PurePath.__str__)."""
+        return str(self)
 
     @cached_property
     def __bytes__(self) -> bytes:
@@ -844,6 +857,10 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
 
         Returns:
             A new URL instance with the specified components modified.
+
+        Raises:
+            ValueError: If netloc is combined with username/password/hostname/port,
+                or path is combined with name.
         """
         if scheme is missing:
             scheme = self.scheme
@@ -851,7 +868,8 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
             scheme = str(scheme)
 
         if username is not missing or password is not missing or hostname is not missing or port is not missing:
-            assert netloc is missing
+            if netloc is not missing:
+                raise ValueError("netloc cannot be combined with username, password, hostname or port")
 
             if username is missing:
                 username = self.username
@@ -880,7 +898,8 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
             netloc = str(netloc)
 
         if name is not missing:
-            assert path is missing
+            if path is not missing:
+                raise ValueError("path cannot be combined with name")
 
             if not isinstance(name, str):
                 name = str(name)
@@ -968,8 +987,12 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
 
         Returns:
             A new URL instance with the modified query string.
+
+        Raises:
+            ValueError: If both query and keyword arguments are given.
         """
-        assert not (query and kwargs)
+        if query and kwargs:
+            raise ValueError("pass the query either positionally or as keyword arguments, not both")
         return self.with_components(query=query or kwargs)
 
     def add_query(self, query: Any = None, **kwargs: Any) -> URL:
@@ -981,8 +1004,12 @@ class URL(urllib.parse._NetlocResultMixinStr, PurePath):
 
         Returns:
             A new URL instance with query parameters added.
+
+        Raises:
+            ValueError: If both query and keyword arguments are given.
         """
-        assert not (query and kwargs)
+        if query and kwargs:
+            raise ValueError("pass the query either positionally or as keyword arguments, not both")
         query = query or kwargs
         if not query:
             return self.with_components()
@@ -1194,13 +1221,15 @@ class JailedURL(URL):
 
     JailedURL ensures all path operations stay within the specified root,
     preventing navigation outside the jail via '..' or absolute paths.
+    '..' segments are collapsed eagerly (and can never climb above the root),
+    so the string form of a JailedURL is always inside the jail.
     Useful for security-sensitive applications or URL templating.
 
     Examples:
         >>> root = URL('http://example.com/app/')
         >>> jail = JailedURL('http://example.com/app/content', root=root)
         >>> str(jail / '../../escape')  # Stays within /app/
-        'http://example.com/app/'
+        'http://example.com/app/escape'
         >>> str(jail / '/absolute')  # Absolute paths relative to root
         'http://example.com/app/absolute'
 
@@ -1221,31 +1250,25 @@ class JailedURL(URL):
         else:
             root = URL(*args)
 
-        assert root.scheme and root.netloc and not root.query and not root.fragment, f"malformed root: {root}"
+        if not (root.scheme and root.netloc and not root.query and not root.fragment):
+            raise ValueError(f"malformed root (needs scheme and netloc, no query or fragment): {root}")
 
         if not root.path:
             root = root / "/"
 
-        return type(cls.__name__, (cls,), {"_chroot": root})._from_parts(args)
+        return type(cls.__name__, (cls,), {"_chroot": root})._from_parts(args)._clamped()
 
     def __init__(self, *args: Any, root: Any = None) -> None:
         """Override __init__ to consume the root keyword argument.
 
-        In Python 3.12, PurePath.__init__ doesn't accept keyword arguments,
-        so we need to consume them here and canonicalize args.
+        In Python 3.12+, PurePath.__init__ doesn't accept keyword arguments and
+        would reset _raw_paths to the original arguments. __new__ has already
+        fully initialized the instance (including clamping), so this is a no-op.
 
         Args:
-            *args: URL arguments (need canonicalization in Python 3.12)
+            *args: URL arguments (handled in __new__)
             root: The root URL (handled in __new__)
         """
-        # The root argument is already handled in __new__
-        # In Python < 3.12, PurePath.__init__ does nothing, so we can't pass args
-        # In Python 3.12, we need to canonicalize and pass args (without root kwarg)
-        if IS_PY312_PLUS:
-            # Must canonicalize args (__init__ receives original args)
-            canonicalized_args = tuple(self._canonicalize_arg(a) for a in args)
-            super().__init__(*canonicalized_args)
-        # else: do nothing, PurePath.__init__ is object.__init__ which takes no args
 
     @classmethod
     def _from_parts(cls, args: Any) -> URL:
@@ -1290,7 +1313,7 @@ class JailedURL(URL):
         else:
             drv, root, parts = chroot._drv, chroot._root, list(self.parts) + parts
 
-        return self._from_parsed_parts(drv, root, parts)
+        return self._from_parsed_parts(drv, root, parts)._clamped()
 
     def joinpath(self, *pathsegments: Any) -> JailedURL:
         """Join path segments to create a new jailed URL.
@@ -1298,7 +1321,7 @@ class JailedURL(URL):
         For JailedURL, behavior differs from regular URL for security:
         - Absolute paths (starting with /) are relative to the chroot, not the domain
         - Full URLs (with scheme) are accepted but will be constrained to chroot in _init
-        - Navigation outside the jail (via '..') is prevented by _init
+        - '..' segments are collapsed immediately and never climb above the chroot
 
         Args:
             *pathsegments: Path segments to join (strings, URLs, or webob.Request)
@@ -1311,8 +1334,8 @@ class JailedURL(URL):
             >>> jail = JailedURL('http://example.com/app/content', root=root)
             >>> str(jail / '/data')  # Absolute path is relative to /app/
             'http://example.com/app/data'
-            >>> str(jail / '../../escape')  # Prevented by _init
-            'http://example.com/app/'
+            >>> str(jail / '../../escape')  # Clamped at the jail root
+            'http://example.com/app/escape'
         """
         if IS_PY312_PLUS:
             chroot = self._chroot
@@ -1388,48 +1411,51 @@ class JailedURL(URL):
         super()._init()
 
     def resolve(self) -> URL:
-        """Resolve relative path components (like '..') within the jail.
+        """Resolve relative path components ('.' and '..') within the jail.
 
-        Creates a fake filesystem-like structure where the chroot appears as the
-        root directory. This allows pathlib's resolve() to process '..' correctly
-        while keeping the result within the jail boundaries.
-
-        In Python 3.12, we patch _parts_cache directly to avoid issues with the
-        cached property returning incorrect values based on the real _drv/_root.
+        '..' segments that would climb above the chroot are discarded, like
+        ``cd ..`` at a filesystem root.
 
         Returns:
-            Resolved URL with '..' components processed, staying within chroot
+            Resolved URL with relative components processed, staying within chroot
         """
-        chroot = self._chroot
-        assert chroot is not None  # Always set by __new__
+        return self._normalized(trailing_sep="")
 
-        if IS_PY312_PLUS:
-            # Python 3.12: _parts is a property computed from _drv, _root, _tail_cached
-            # The resolve logic for jailed URLs needs _parts to look like:
-            # ["http://example.com/app/", "path", "to", "content", "..", "file"]
-            # This maps to:
-            # - _drv = "" (empty, no URL scheme/netloc drive)
-            # - _root = "http://example.com/app/" (the chroot as a fake filesystem root)
-            # - _tail_cached = ("path", "to", "content", "..", "file")
-            chroot_root_str = "".join(chroot._parts)  # Join chroot parts into one string
-            tail_parts = self._parts[len(chroot.parts) :]  # Get parts after chroot
+    def _clamped(self) -> JailedURL:
+        """Return self, or a copy with '..' collapsed if any '..' segment is present."""
+        root_path = self.chroot.path.rstrip(self._flavour.sep)
+        segments = self.path[len(root_path) :].split(self._flavour.sep)
+        if any(urllib.parse.unquote(segment) == ".." for segment in segments):
+            return self._normalized(trailing_sep=self.trailing_sep)
+        return self
 
-            # Build the _parts list that resolve() expects
-            fake_parts = [chroot_root_str] + tail_parts
+    def _normalized(self, trailing_sep: str) -> JailedURL:
+        """Collapse '.', '..' and empty segments below the chroot without ever leaving it.
 
-            with (
-                patch.object(self, "_drv", ""),
-                patch.object(self, "_root", chroot_root_str),
-                patch.object(self, "_tail_cached", tuple(tail_parts)),
-                patch.object(self, "_parts_cache", fake_parts),  # Directly patch the cache
-            ):
-                return super().resolve()
-        else:
-            with (
-                patch.object(self, "_root", chroot.path),
-                patch.object(self, "_parts", ["".join(chroot._parts)] + self._parts[len(chroot._parts) :]),
-            ):
-                return super().resolve()
+        Works on the percent-encoded path so encoded segments (e.g. '%2e%2e') are
+        recognised but otherwise preserved verbatim.
+
+        Args:
+            trailing_sep: Trailing separator to append to the normalized path
+
+        Returns:
+            New jailed URL with the normalized path
+        """
+        chroot = self.chroot
+        sep = self._flavour.sep
+        root_path = chroot.path.rstrip(sep)
+
+        kept: list[str] = []
+        for segment in self.path[len(root_path) :].split(sep):
+            decoded = urllib.parse.unquote(segment)
+            if decoded == "..":
+                if kept:
+                    kept.pop()
+            elif decoded not in ("", "."):
+                kept.append(segment)
+
+        path = sep.join([root_path, *kept]) + trailing_sep if kept else chroot.path
+        return type(self)(urllib.parse.urlunsplit((self.scheme, self.netloc, path, self.query, self.fragment)))
 
     @property
     def chroot(self) -> URL:

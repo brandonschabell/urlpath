@@ -85,20 +85,20 @@ if IS_PY312_PLUS:
                 if seg_root:
                     # Absolute path keeps existing drive if present
                     res_drv, _, _ = _url_splitroot(result)
-                    segment_clean = segment.replace("\\x00", "/")
+                    segment_clean = segment.replace("\x00", "/")
                     result = res_drv + segment_clean if res_drv else segment_clean
                     continue
 
                 res_drv, res_root, res_tail = _url_splitroot(result)
                 if res_drv or res_root:
-                    base_path = (res_root + res_tail).replace("\\x00", "/")
-                    segment_clean = segment.replace("\\x00", "/")
+                    base_path = (res_root + res_tail).replace("\x00", "/")
+                    segment_clean = segment.replace("\x00", "/")
                     joined = posixpath.join(base_path, segment_clean)
                     if res_drv and not joined.startswith("/"):
                         joined = "/" + joined
                     result = res_drv + joined
                 else:
-                    result = posixpath.join(result.replace("\\x00", "/"), segment.replace("\\x00", "/"))
+                    result = posixpath.join(result.replace("\x00", "/"), segment.replace("\x00", "/"))
 
             return result
 
@@ -121,7 +121,7 @@ else:
         Extends PosixFlavour to treat URLs as paths by:
         - Using scheme+netloc as the drive component
         - Parsing URL components (scheme, netloc, path, query, fragment)
-        - Escaping '/' characters in query and fragment with \\x00
+        - Escaping '/' characters in query and fragment with a NUL (\x00) marker
         """
 
         has_drv = True  # drive is scheme + netloc

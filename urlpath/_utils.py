@@ -38,8 +38,11 @@ class FrozenDict(Mapping[_KT, _VT]):
         >>> fd = FrozenDict({'a': 1, 'b': 2})
         >>> fd['a']
         1
-        >>> hash(fd)  # Can be hashed
+        >>> hash(fd) == hash(FrozenDict({'b': 2, 'a': 1}))  # Can be hashed
+        True
         >>> fd['a'] = 3  # Raises error - immutable
+        Traceback (most recent call last):
+        TypeError: 'FrozenDict' object does not support item assignment
     """
 
     __slots__ = ("_d", "_hash")
@@ -187,7 +190,11 @@ def netlocjoin(
         result += "@"
 
     if hostname is not None:
-        result += hostname.encode("idna").decode("ascii")
+        if ":" in hostname:
+            # IPv6 literal: urllib strips the brackets, so restore them
+            result += f"[{hostname}]"
+        else:
+            result += hostname.encode("idna").decode("ascii")
 
     if port is not None:
         result += ":" + str(port)
@@ -209,16 +216,20 @@ def _url_splitroot(part: str, sep: str = "/") -> tuple[str, str, str]:
         - drive is 'scheme://netloc'
         - root is the leading '/' if present
         - path is the remainder with query/fragment escaped
+
+    Raises:
+        ValueError: If ``part`` contains a NUL character (reserved as the internal escape marker).
     """
     assert sep == "/"
-    assert "\\x00" not in part
+    if "\x00" in part:
+        raise ValueError(f"URL must not contain NUL characters: {part!r}")
 
     scheme, netloc, path, query, fragment = urllib.parse.urlsplit(part)
 
     # trick to escape '/' in query and fragment and trailing
     if not re.match(re.escape(sep) + "+$", path):
-        path = re.sub(f"{re.escape(sep)}+$", lambda m: "\\x00" * len(m.group(0)), path)
-    path = urllib.parse.urlunsplit(("", "", path, query.replace("/", "\\x00"), fragment.replace("/", "\\x00")))
+        path = re.sub(f"{re.escape(sep)}+$", lambda m: "\x00" * len(m.group(0)), path)
+    path = urllib.parse.urlunsplit(("", "", path, query.replace("/", "\x00"), fragment.replace("/", "\x00")))
 
     drive = urllib.parse.urlunsplit((scheme, netloc, "", "", ""))
     match = re.match(f"^({re.escape(sep)}*)(.*)$", path)
@@ -240,4 +251,4 @@ def cleanup_escapes(text: str) -> str:
     Returns:
         String with \x00 replaced by /
     """
-    return text.replace("\x00", "/").replace("\\x00", "/").replace("%5Cx00", "/").replace("%5cx00", "/")
+    return text.replace("\x00", "/")
