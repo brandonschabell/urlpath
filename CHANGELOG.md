@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **`JailedURL` now collapses `..` segments eagerly** when joining or constructing, so `str()` of a jailed URL
+  can never point outside the jail root (previously this only happened on `.resolve()`). For example,
+  `str(JailedURL("http://example.com/app") / "../../etc")` is now `http://example.com/app/etc`.
+- Invalid argument combinations (`with_components`, `with_query`, `add_query`) and a malformed `JailedURL` root
+  now raise `ValueError` instead of `AssertionError` (the checks no longer disappear under `python -O`)
+- URLs containing a raw NUL character now raise `ValueError`
+- Added support for Python 3.15; CI also runs on pushes to `main`
+- Docstring examples are now run as doctests
+
+### Fixed
+- Python 3.15: `os.fspath(url)` returned the internal escaped string, breaking joins and `with_*` methods
+- IPv6 hosts lost their brackets (`http://[::1]:8080/` was rendered as `http://::1:8080/`)
+- The literal text `\x00` (and `%5Cx00` / `%5cx00`) in a URL was rewritten to `/` or raised `AssertionError`
+- `JailedURL.resolve()` could duplicate the root path (`/app/app/...`) if `.parts` had been accessed first
+- `relative_to()` raised on Python 3.12+ when the URL had a trailing slash, query or fragment
+- Incorrect docstring examples for `URL`, `JailedURL` and `FrozenDict`
+
 ## [2.0.0] - 2025-10-13
 
 ### Changed

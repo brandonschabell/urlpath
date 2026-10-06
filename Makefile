@@ -21,8 +21,8 @@ test: test-unit test-doctest ## Run all tests
 test-unit: ## Run unit tests
 	uv run --group dev pytest tests/
 
-test-doctest: ## Run doctests from README
-	uv run --group dev pytest README.md --markdown-docs
+test-doctest: ## Run doctests from README and docstrings
+	uv run --group dev pytest README.md --markdown-docs urlpath/ --doctest-modules
 
 build: ## Build package
 	uv build
@@ -43,4 +43,4 @@ check: ## Verify code quality (format, lint, type check, test)
 	uv run --group dev ruff format --check
 	uv run --group dev ruff check
 	uv run --group dev mypy urlpath/ tests/
-	uv run --group dev pytest tests/ README.md --markdown-docs
+	uv run --group dev pytest tests/ README.md --markdown-docs urlpath/ --doctest-modules

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import urllib.parse
 from pathlib import PurePosixPath
 from typing import Any, cast
@@ -222,6 +223,32 @@ def test_jail() -> None:
     assert str(url / "http://www.example.com/app/path") == "http://www.example.com/app/path"
 
 
+def test_jail_clamps_parent_references() -> None:
+    root = URL("http://www.example.com/app/")
+    url = root.jailed / "http://www.example.com/app/path/to/content"
+
+    # '..' must never survive into the string form, where a server could follow it out of the jail
+    assert str(url / "../file") == "http://www.example.com/app/path/to/file"
+    assert str(url / "../../../../etc") == "http://www.example.com/app/etc"
+    assert str(url / "a" / ".." / ".." / ".." / ".." / ".." / "etc") == "http://www.example.com/app/etc"
+    assert str(url / "%2e%2e/%2E%2E/%2e%2e/%2e%2e/etc") == "http://www.example.com/app/etc"
+    assert str(url.joinpath("..", "..", "..", "..", "etc")) == "http://www.example.com/app/etc"
+    assert str(JailedURL("http://www.example.com/app/../../etc", root=root)) == "http://www.example.com/app/etc"
+    assert str(url.with_components(path="/app/../../etc")) == "http://www.example.com/app/etc"
+    assert isinstance(url / "../file", JailedURL)
+    assert (url / "../file").chroot == root
+
+
+def test_jail_resolve_is_independent_of_cached_parts() -> None:
+    url = URL("http://www.example.com/app/").jailed / "http://www.example.com/app/path/./to//file/"
+    expected = "http://www.example.com/app/path/to/file"
+
+    assert str(url.resolve()) == expected
+    url = URL("http://www.example.com/app/").jailed / "http://www.example.com/app/path/./to//file/"
+    assert url.parts  # populate cached properties before resolving
+    assert str(url.resolve()) == expected
+
+
 def test_init_with_empty_string() -> None:
     url = URL("")
 
@@ -385,6 +412,83 @@ def test_colon_in_filename() -> None:
     assert url.query == "key=value"
     assert url.fragment == "frag"
     assert str(url) == "http://www.example.com/abc:def.html?key=value#frag"
+
+
+def test_fspath_matches_str() -> None:
+    # Python 3.15 aliased PurePath.__fspath__ to PurePath.__str__, bypassing URL.__str__
+    url = URL("http://localhost/app/?q#frag")
+
+    assert os.fspath(url) == str(url) == "http://localhost/app/?q#frag"
+    assert str(URL("http://example.com/path/?q") / URL("to/content")) == "http://example.com/path/to/content"
+
+
+def test_ipv6() -> None:
+    url = URL("http://[::1]:8080/path")
+
+    assert str(url) == "http://[::1]:8080/path"
+    assert url.netloc == "[::1]:8080"
+    assert url.hostinfo == "[::1]:8080"
+    assert url.hostname == "::1"
+    assert url.port == 8080
+    assert str(url / "child") == "http://[::1]:8080/path/child"
+    assert str(URL("http://user:pw@[2001:db8::1]/")) == "http://user:pw@[2001:db8::1]/"
+    assert str(URL("http://localhost/").with_hostinfo("::1", 80)) == "http://[::1]:80/"
+
+
+def test_escape_marker_text_is_preserved() -> None:
+    # Literal text resembling the internal '/' escape marker must round-trip unchanged
+    assert str(URL("http://example.com/x?q=%5Cx00")) == "http://example.com/x?q=%5Cx00"
+    assert URL("http://example.com/x?q=%5cx00").query == "q=%5cx00"
+    assert str(URL("http://example.com/a%5Cx00b")) == "http://example.com/a%5Cx00b"
+    assert URL("http://example.com/a%5Cx00b").name == "a\\x00b"
+    assert str(URL("http://example.com/x#frag%5Cx00")) == "http://example.com/x#frag%5Cx00"
+
+
+def test_escape_marker_does_not_leak() -> None:
+    # '/' in trailing separators, query and fragment is escaped internally and must be restored
+    for original in (
+        "http://example.com/dir/",
+        "http://example.com/dir//",
+        "http://example.com/dir/?next=/a/b#/frag/ment",
+        "http://example.com/?q=/",
+        "relative/path/?q=/x",
+    ):
+        url = URL(original)
+        assert str(url) == original
+        assert "\x00" not in "".join(url.parts) + url.path + url.query + url.fragment
+
+    assert str(URL("http://example.com/dir/file?q=/x").with_name("new")) == "http://example.com/dir/new"
+    assert str(URL("http://example.com/dir/file?q=/x").with_suffix(".txt")) == "http://example.com/dir/file.txt"
+    assert str(URL("http://example.com/dir/sub/?q=/x").parent) == "http://example.com/dir"
+
+
+def test_relative_to_preserves_trailing_sep_query_and_fragment() -> None:
+    relative = URL("http://example.com/a/b/").relative_to("http://example.com/a")
+    assert str(relative) == "b/"
+    assert relative.trailing_sep == "/"
+
+    relative = URL("http://example.com/a/b?q=1/2#f/g").relative_to("http://example.com/a")
+    assert str(relative) == "b?q=1/2#f/g"
+    assert relative.query == "q=1/2"
+    assert relative.fragment == "f/g"
+
+    assert str(URL("http://example.com/a/b/c/?q=1/2").relative_to("http://example.com/")) == "a/b/c/?q=1/2"
+    assert str(URL("http://example.com/a/b").relative_to("http://example.com/a")) == "b"
+
+
+@pytest.mark.parametrize(
+    ("call", "message"),
+    (
+        (lambda url: url.with_query({"a": "1"}, b="2"), "query"),
+        (lambda url: url.add_query({"a": "1"}, b="2"), "query"),
+        (lambda url: url.with_components(netloc="x", hostname="y"), "netloc"),
+        (lambda url: url.with_components(path="/x", name="y"), "path"),
+        (lambda url: JailedURL("http://example.com/app", root="/relative"), "root"),
+    ),
+)
+def test_invalid_arguments_raise_value_error(call: Any, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        call(URL("http://example.com/"))
 
 
 def test_get_json_with_jmespath_filtering() -> None:
